@@ -43,7 +43,7 @@ enum TYPES {
 struct operands {
 	struct operands *op_ret;
 	unsigned int op_type;
-	int op_id;
+	unsigned int op_id;
 };
 
 /* list of all compiler errors */
@@ -60,10 +60,10 @@ enum COMPILEERRORS {
 
 void stackdump();
 int shutdown();
-int compile(char *);
+int compile();
 void helptext(char *);
 bool push(unsigned int type);
-void pop();
+struct operands *pop();
 char getInput(char *);
 void logger(char *);
 void parsePrint();
@@ -86,12 +86,12 @@ unsigned int idnum = 0;
 unsigned int indentlevel=0;
 unsigned int mode=0;
 
-struct operands stackbottom={
+const struct operands opbase={
 	NULL,
 	T_NONE,
 	0
 };
-struct operands *opstack=&stackbottom;
+struct operands *opstack=&opbase;
 
 const char *COMPILEERRORNAMES[]={
 	"no error",
@@ -389,12 +389,14 @@ bool push(unsigned int mytype) {
 	return false;
 }
 
-void pop() {
-	--indentlevel;
+struct operands *pop() {
 	struct operands *op;
-	op=opstack;
-	opstack=opstack->op_ret;
-	free(op);
+	if (((op=opstack)) && op->op_ret) {
+		--indentlevel;
+		opstack=opstack->op_ret;
+		return op;
+	}
+	return NULL;
 }
 
 /* write a note in the logfile */
@@ -407,10 +409,11 @@ void logger(char *contents) {
 
 /* Error handler */
 void stackdump() {
+	struct operands *op;
 	fprintf(stderr, "\nERROR: %s\n\nstackdump:\n", COMPILEERRORNAMES[errorlevel]);
-	while (opstack->op_ret != NULL) {
-		fprintf(stderr, "operand of type %s\nnumber %d\n", TYPENAMES[opstack->op_type], opstack->op_id);
-		pop();
+	while ((op=pop() )) {
+		fprintf(stderr, "operand of type %s\nnumber %d\n", TYPENAMES[op->op_type], op->op_id);
+		free(op);
 	}
 }
 
@@ -441,7 +444,7 @@ int shutdown() {
 		case STATEHEADOPEN:
 			fclose(statehead);
 		case SRCOPEN:
-			fclose(src);
+			/*fclose(src);*/
 		case NORMAL:
 			return retval;
 		break;
@@ -452,10 +455,11 @@ int shutdown() {
 }
 
 /* open files and compile */
-int compile(char *filename) {
+int compile() {
 	level =NORMAL;
 	if (mode) {
-		src=fopen(filename, "rb");
+		/*src=fopen(filename, "rb");*/
+		src=stdin;
 		if (src) {
 			level=SRCOPEN;
 			if (mode&COMPILE) {
@@ -504,7 +508,7 @@ int compile(char *filename) {
 
 /* print the help text to stdout */
 void helptext(char *commandname) {
-	printf("%s [-d|V|v] filename.mb\n", commandname);
+	printf("%s [-d|V|v] < filename.mb\n", commandname);
 	printf("\n where the optional -d is a dump of identifiers to a log file\n");
 	printf("or -V is for a verbose build where the compiler dumps and compiles.\n");
 	printf("-v prints the version and exits.\n\n");
@@ -513,25 +517,25 @@ void helptext(char *commandname) {
 /* process command line parameters */
 int main(int argc, char *argv[]) {
 	switch (argc) {
-		case 2:
+		case 1:
 			mode=COMPILE;
 			printf("\ncompile initiated\n");
-			return compile(argv[1]);
+			return compile();
 		break;
-		case 3:
+		case 2:
 			if (argv[1][0]=='-') {
 				switch (argv[1][1]) {
 					case 'd':
-						printf("\n%s identifier dump initiated\n", argv[2]);
+						printf("\nidentifier dump initiated\n");
 						mode=DUMP;
-						return compile(argv[2]);
+						return compile();
 					case 'v':
 						printf("\n%s version %d.%d.%d", argv[0], 0, 1, 0);
 						return 0;
 					case 'V':
 						printf("\nverbose compile\n");
 						mode=DUMP|COMPILE;
-						return compile(argv[2]);
+						return compile();
 					default:
 						helptext(argv[0]);
 					break;

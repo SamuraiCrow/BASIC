@@ -16,7 +16,7 @@ mb.c: src/mattathias.peg
 	packcc -omb src/mattathias.peg 
 
 test: debug/mb test/hello.mb
-	debug/mb -d test/hello.mb 2>parsedebug.log
+	debug/mb -d <test/hello.mb 2>parsedebug.log
 
 compile: debug/mb runtime/runtime.h runtime/runtime.c
 	gcc runtime/runtime.c -g -o hello.exe -std=gnu99
