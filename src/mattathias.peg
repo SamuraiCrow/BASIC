@@ -24,20 +24,20 @@ enum RUNLEVEL {
 
 /* list of all variable and consant types */
 enum TYPES {
-	NONE,
-	STRING,
-	INT,
-	FLOAT,
-	STRINGVAR,
-	INTVAR,
-	FLOATVAR,
-	WHILELOOP,
-	FORLOOP,
-	REPEATLOOP,
-	DOLOOP,
-	IF,
-	PROCEDURE,
-	FUNCTION
+	T_NONE,
+	T_STRING,
+	T_INT,
+	T_FLOAT,
+	T_STRINGVAR,
+	T_INTVAR,
+	T_FLOATVAR,
+	T_WHILELOOP,
+	T_FORLOOP,
+	T_REPEATLOOP,
+	T_DOLOOP,
+	T_IF,
+	T_PROCEDURE,
+	T_FUNCTION
 };
 
 struct operands {
@@ -46,12 +46,12 @@ struct operands {
 	int op_id;
 };
 
-/* list of all compile errors */
+/* list of all compiler errors */
 enum COMPILEERRORS {
-	OK,
-	BAD_SYNTAX,
-	TYPE_MISMATCH,
-	BAD_ALLOC
+	E_OK,
+	E_BAD_SYNTAX,
+	E_TYPE_MISMATCH,
+	E_BAD_ALLOC
 };
 }
 %source {
@@ -80,18 +80,18 @@ FILE *logfile=NULL;
 FILE *src=NULL;
 
 enum RUNLEVEL level;
-enum COMPILEERRORS errorlevel;
+enum COMPILEERRORS errorlevel=E_OK;
 
 unsigned int idnum = 0;
 unsigned int indentlevel=0;
 unsigned int mode=0;
 
-struct operands *opstack;
 struct operands stackbottom={
 	NULL,
-	NONE,
+	T_NONE,
 	0
 };
+struct operands *opstack=&stackbottom;
 
 const char *COMPILEERRORNAMES[]={
 	"no error",
@@ -128,109 +128,111 @@ const char *TYPEFORMATS[]={
 };
 }
 
-START		<-  ( Line EndOfLine )* Line EndOfFile ~{errorlevel=BAD_SYNTAX;}
+START			<-	( Line EndOfLine )* Line EndOfFile ~{errorlevel=E_BAD_SYNTAX;}
 
-Line			<-  Label? Spacing Statements? Separator?
+Line				<-	Label? Spacing Statements? Separator?
 
-Statements	<- SNGLQUOTE Comment
-			/ Statement (Spacing Separator Statement)* Spacing
+Statements		<-	SNGLQUOTE Comment
+					/ Statement (Spacing Separator Statement)* Spacing
 
-Comment		<- ( !(EndOfLine) .)*
+Comment			<-	( !(EndOfLine) .)*
 
-Statement	<- "REM" Comment
-			 / "PRINT" PrintExpr {parsePrint();}
-			 / "IF" Spacing Expression ElseSequence?
-			 / "ELSE"
-			 #elif appears in Amos manual but not in original compiler
-			 / "ELIF" Spacing Expression ElseSequence
-			 / "ENDIF"
-			 / "WHILE" Spacing Expression
-			 / "WEND"
-			 / "DIM" Spacing DimElem ( COMMA DimElem )*
-			 / "DO"
-			 / "EXIT" Spacing (
-				("WHEN" Spacing Expression)
-					/ Expression
-					)?
-			 / "LOOP"
-			 / "FOR" Spacing IntVar EQUAL Range ( "step" Spacing Expression )?
-			 / "NEXT" ( Spacing IntVar )?
-			 / "INC" Spacing IntVar
-			 / "DEC" Spacing IntVar
-			 / "ADD" Spacing IntVar Spacing COMMA Expression
-			 			( Spacing COMMA Range )?
-			 / "END" {parseEnd();}
-			 / StringVar Spacing ASSIGN StringExpr
-			 / FloatVar Spacing ASSIGN Expression
-			 / IntVar Spacing ASSIGN Expression
-			 / !(':' / EndOfLine / EndOfFile) ~{errorlevel=BAD_SYNTAX;}
+Statement		<-	"REM" Comment
+					/ "PRINT" PrintExpr {parsePrint();}
+					/ "IF" Spacing Expression ElseSequence?
+					/ "ELSE"
+					#elif appears in Amos manual but not in original compiler
+					/ "ELIF" Spacing Expression ElseSequence
+					/ "ENDIF"
+					/ "WHILE" Spacing Expression
+					/ "WEND"
+					/ "DIM" Spacing DimElem ( COMMA DimElem )*
+					/ "DO"
+					/ "EXIT" Spacing (
+						("WHEN" Spacing Expression)
+						/ Expression
+						)?
+					/ "LOOP"
+					/ "FOR" Spacing IntVar EQUAL Range ( "step" Spacing Expression )?
+					/ "NEXT" ( Spacing IntVar )?
+					/ "INC" Spacing IntVar
+					/ "DEC" Spacing IntVar
+					/ "ADD" Spacing IntVar Spacing COMMA Expression
+						( Spacing COMMA Range )?
+					/ "END" {parseEnd();}
+					/ StringVar Spacing ASSIGN StringExpr
+					/ FloatVar Spacing ASSIGN Expression
+					/ IntVar Spacing ASSIGN Expression
+					/ !(':' / EndOfLine / EndOfFile) ~{errorlevel=E_BAD_SYNTAX;}
 
-StringVar		<-	< ID StringMark >
+StringVar			<-	< ID StringMark >
 
-FloatVar		<-	< ID Floatmark >
+FloatVar			<-	< ID Floatmark >
 
-IntVar		<-	< ID >
+IntVar			<-	< ID >
 
-Label		<-	< ID > ':'
+Label			<-	< ID > ':'
 
-ElseSequence <- Spacing "THEN" Spacing Statements
-		 			("ELSE" Spacing Statements)?
+ElseSequence		<-	Spacing "THEN" Spacing Statements
+						("ELSE" Spacing Statements)?
 
-StringCond	<- StringExpr EQUAL StringExpr
-				 / NOTEQUAL StringExpr
-				 / GREATEREQUAL StringExpr
-				 / LESSEQUAL StringExpr
-				 / GREATER StringExpr
-				 / LESS StringExpr
+StringCond		<-	StringExpr EQUAL StringExpr
+					/ NOTEQUAL StringExpr
+					/ GREATEREQUAL StringExpr
+					/ LESSEQUAL StringExpr
+					/ GREATER StringExpr
+					/ LESS StringExpr
 
-LogicExpression	<- Sum Spacing ( 
-				(
-					AND Sum
-			 		/ OR Sum
-					/ XOR Sum
-				)
-			Spacing )*
+LogicExpression	<- 	Sum Spacing ( 
+						(
+						AND Sum
+						/ OR Sum
+						/ XOR Sum
+						)
+					Spacing )*
 
-NumCond		<- LogicExpression ( EQUAL LogicExpression
-				 / NOTEQUAL LogicExpression
-				 / GREATEREQUAL LogicExpression
-				 / LESSEQUAL LogicExpression
-				 / GREATER LogicExpression
-				 / LESS LogicExpression )?
+NumCond			<- 	LogicExpression ( EQUAL LogicExpression
+					/ NOTEQUAL LogicExpression
+					/ GREATEREQUAL LogicExpression
+					/ LESSEQUAL LogicExpression
+					/ GREATER LogicExpression
+					/ LESS LogicExpression )?
 
-Cond		<- ( StringCond / NumCond ) Spacing
+Cond			<-	( StringCond / NumCond ) Spacing
 
-Expression	<- Cond ( AND Cond
-			 / OR Cond
-			 / XOR Cond )*
+Expression		<-	Cond ( AND Cond
+					/ OR Cond
+					/ XOR Cond )*
 
-PrintExpr	<- ( Spacing PrintVal PRINTSEPARATOR / COMMA )*
+PrintExpr			<-	( Spacing PrintVal PRINTSEPARATOR / COMMA )*
 
-PrintVal	<- StringExpr
-			/ Expression Spacing
+PrintVal			<-	StringExpr
+					/ Expression Spacing
 
-StringExpr	<- StringVal Spacing (SIGN StringVal Spacing)*
+StringExpr		<-	StringVal Spacing (SIGN StringVal Spacing)*
 
-StringFunction	<-	"CHR"
+StringFunction		<-	"CHR"
 					/ "MID"
 					/ "LEFT"
 					/ "RIGHT"
 					/ "SPACE"
 
 
-StringVal	<- DBLQUOTE < ( !(DBLQUOTE / EndOfLine) .)* > DBLQUOTE	{ parseString($1e-$1s, $1); }
-		 / <StringFunction StringMark> Paramlist
-		 / StringVar Paramlist
-		 / StringVar !ASSIGN
+StringVal			<-	DBLQUOTE 
+						< ( !(DBLQUOTE / EndOfLine) .)* >
+					DBLQUOTE						{ parseString($1e-$1s, $1); }
+					/ <StringFunction StringMark> Paramlist
+					/ StringVar Paramlist
+					/ StringVar !ASSIGN
 
-Sum		<- Product ( Spacing
+Sum				<-	Product ( Spacing
 						(
 						PLUS Product
 						/ MINUS Product
 						)
 					)*
 
-Product		<- Exponent ( Spacing
+Product			<- Exponent ( Spacing
 					( TIMES  Exponent
 		                	/ DIVIDE Exponent
         		        	/ MODULO Exponent
@@ -239,135 +241,137 @@ Product		<- Exponent ( Spacing
 
 Exponent	<- Value ( Spacing POWER Value )*
 
-IntFunction	<- "SGN"
-				/ "SQR"
-				/ "LOG"
-				/ "MIN"
-				/ "MAX"
-				/ "INT"
-				/ "ABS"
-				/ "RND"
+IntFunction		<-	"SGN"
+					/ "SQR"
+					/ "LOG"
+					/ "MIN"
+					/ "MAX"
+					/ "INT"
+					/ "ABS"
+					/ "RND"
 
-IntValue	<-	NOT? IntUnary (
+IntValue			<-	NOT? IntUnary (
 					IntFunction Paramlist
 					/ IntVar Paramlist
 					/ IntVar !ASSIGN
 					/ Integer
 				)
 
-FloatFunction	<-	"SGN"
-				/ "SQR"
-				/ "LOG"
-				/ "MIN"
-				/ "MAX"
-				/ "ABS"
-				/ "LN"
-				/ "EXP"
-				/ "SIN"
-				/ "COS"
-				/ "TAN"
-				/ "ASIN"
-				/ "ACOS"
-				/ "ATAN"
-				/ "HSIN"
-				/ "HCOS"
-				/ "HTAN"
+FloatFunction		<-	"SGN"
+					/ "SQR"
+					/ "LOG"
+					/ "MIN"
+					/ "MAX"
+					/ "ABS"
+					/ "LN"
+					/ "EXP"
+					/ "SIN"
+					/ "COS"
+					/ "TAN"
+					/ "ASIN"
+					/ "ACOS"
+					/ "ATAN"
+					/ "HSIN"
+					/ "HCOS"
+					/ "HTAN"
 
-FloatValue	<-	FloatUnary (
+FloatValue			<-	FloatUnary (
 					FloatFunction Paramlist
 					/ FloatVar Paramlist
 					/ FloatVar !ASSIGN
 					/ Float
 				)
 
-Value	<-	FloatValue
-			/ IntValue
-			/ OPEN Expression CLOSE
+Value			<-	FloatValue
+				/ IntValue
+				/ OPEN Expression CLOSE
 
-Float	<- < SIGN? [0-9]+ '.' [0-9]* (
-				'e' SIGN [0-9]+
-			)? > Spacing
+Float				<-	< SIGN? [0-9]+ '.' [0-9]* (
+						'e' SIGN [0-9]+
+					)? > Spacing
 
-Var		<- FloatVar
-			/ StringVar
-			/ IntVar
+Var				<-	FloatVar
+					/ StringVar
+					/ IntVar
 
-DimArray	<- Var Paramlist
+DimArray			<-	Var Paramlist
 
-DimElem		<- ( Var / DimArray ) Spacing
+DimElem			<-	( Var / DimArray ) Spacing
 
-Range		<- Expression Spacing TO Expression Spacing
+Range			<-	Expression Spacing TO Expression Spacing
 
 #Paramlist denotes a function or an array
-Paramlist	<- OPEN Expression (Spacing COMMA Expression)* CLOSE
+Paramlist			<-	OPEN Expression (Spacing COMMA Expression)* CLOSE
 
 #these are placeholders for actions later on
-IntUnary	<- SIGN?
+IntUnary			<-	SIGN?
 
-FloatUnary	<- SIGN?
+FloatUnary		<-	SIGN?
 
 # Lexemes
 
-SIGN		<- PLUS / MINUS
-Integer		<- < SIGN? [0-9]+ >	Spacing
-ID			<- IdentStart IdentCont*
-IdentStart	<- [a-zA-Z_]
-IdentCont		<- [a-zA-Z_0-9]
-LESS		<- '<'		Spacing
-GREATER		<- '>'		Spacing
-LESSEQUAL	<- "<="		Spacing
-GREATEREQUAL	<- ">="		Spacing
-NOTEQUAL	<- "<>"		Spacing
-EQUAL		<- '='		Spacing
-ASSIGN		<- '='		Spacing
-PLUS		<- '+'		Spacing
-MINUS		<- '-'		Spacing
-TIMES		<- '*'		Spacing
-DIVIDE		<- '/'		Spacing
-MODULO		<- "MOD"	Spacing
-POWER		<- '^'		Spacing
-OPEN		<- '('		Spacing
-CLOSE		<- ')'		Spacing
-#SQUAREOPEN	<- '['		Spacing
-#SQUARECLOSE	<- ']'		Spacing
-PRINTSEPARATOR	<- ';' 	Spacing
-AND			<- "AND"	Spacing
-OR			<- "OR"		Spacing
-XOR			<- "XOR"	Spacing
-NOT			<- "NOT"	Spacing
-COMMA		<- ','		Spacing
-TO			<- "TO"		Spacing
-SNGLQUOTE	<- '\''
-DBLQUOTE	<- '\"'
-StringMark	<- '$'
-Floatmark		<- '#'
-Spacing		<- (' ' / '\t')*
-EndOfFile		<- !.
-Separator		<- ':' Spacing
-EndOfLine	<- '\r\n' / '\n' / '\r'
+SIGN			<- PLUS / MINUS
+Integer			<- < SIGN? [0-9]+ > Spacing
+ID				<- IdentStart IdentCont*	
+IdentStart		<- [a-zA-Z_]
+IdentCont			<- [a-zA-Z_0-9]
+LESS			<- '<' Spacing
+GREATER			<- '>' Spacing
+LESSEQUAL		<- "<=" Spacing
+GREATEREQUAL	<- ">=" Spacing
+NOTEQUAL		<- "<>" Spacing
+EQUAL			<- '=' Spacing
+ASSIGN			<- '=' Spacing
+PLUS			<- '+' Spacing
+MINUS			<- '-'	 Spacing
+TIMES			<- '*' Spacing
+DIVIDE			<- '/'	 Spacing
+MODULO			<- "MOD"	Spacing
+POWER			<- '^' Spacing
+OPEN			<- '(' Spacing
+CLOSE			<- ')' Spacing
+#SQUAREOPEN		<- '['	 Spacing
+#SQUARECLOSE	<- ']'	 Spacing
+PRINTSEPARATOR	<- ';'  Spacing
+AND				<- "AND" Spacing
+OR				<- "OR" Spacing
+XOR				<- "XOR" Spacing
+NOT				<- "NOT" Spacing
+COMMA			<- ','	 Spacing
+TO				<- "TO" Spacing
+SNGLQUOTE		<- '\''
+DBLQUOTE		<- '\"'
+StringMark		<- '$'
+Floatmark			<- '#'
+Spacing			<- (' ' / '\t')*
+EndOfFile			<- !.
+Separator			<- ':' Spacing
+EndOfLine		<- '\r\n' / '\n' / '\r'
+
 %%
+
 void parsePrint() {
+	if (mode&DUMP) logger("print statement");
 	if (mode&COMPILE) {
 		fprintf(state,"printf(\"%%%s\", const%d);\\n",TYPEFORMATS[opstack->op_type], opstack->op_id);
 		pop();
 	}
-	if (mode&DUMP) logger("print statement");
 }
 
 void parseEnd() {
 	if (mode&DUMP) logger("end statement");
-	if (mode&COMPILE) fprintf(state,"__statevar=__EXIT;\nbreak;\n");
+	if (mode&COMPILE) fprintf(state, "__statevar=__EXIT;\nbreak;\n");
 }
 
 void parseString(int length, const char *text) {
+	if (mode & DUMP) logger("string pushed");
 	if (mode & COMPILE) {
-		if (push(STRING)) {
+		if (push(T_STRING)) {
 			fprintf(consts, "const unsigned int length%d=%d;\nconst char *constant%d=\"%s\";\n", opstack->op_id, length, opstack->op_id, text);
 		} else {
-			errorlevel=BAD_ALLOC;
+			errorlevel=E_BAD_ALLOC;
 		}
 	}
-	if (mode & DUMP) logger("string pushed");
 }
 
 /* stack support for operand stack */
@@ -379,8 +383,10 @@ bool push(unsigned int mytype) {
 		++idnum;
 		op->op_id=idnum;
 		op->op_ret=opstack;
+		opstack=op;
+		return true;
 	}
-	return op!=NULL;
+	return false;
 }
 
 void pop() {
@@ -419,7 +425,7 @@ int shutdown() {
 		fprintf(heaphead,"};\n");
 		fprintf(state,"}\n}while(__statevar>__EXIT);\nreturn __statevar;\n}\n");
 	}
-	if  (errorlevel != OK) {
+	if  (errorlevel != E_OK) {
 		stackdump();
 		retval=1;
 	}
@@ -448,8 +454,6 @@ int shutdown() {
 /* open files and compile */
 int compile(char *filename) {
 	level =NORMAL;
-	opstack=&stackbottom;
-	
 	if (mode) {
 		src=fopen(filename, "rb");
 		if (src) {
@@ -508,7 +512,6 @@ void helptext(char *commandname) {
 
 /* process command line parameters */
 int main(int argc, char *argv[]) {
-	errorlevel=OK;
 	switch (argc) {
 		case 2:
 			mode=COMPILE;

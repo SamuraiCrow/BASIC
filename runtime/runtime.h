@@ -2,8 +2,8 @@
 ** by Samuel D. Crow
 */
 
-#IFNDEF __RUNTIME__
-#DEFINE __RUNTIME__
+#ifndef __RUNTIME__
+#define __RUNTIME__
 
 /* Base structures */
 struct __subroutine {
@@ -24,6 +24,6 @@ enum __errors {
 /* BASIC strings */
 struct __string {
 	unsigned int __length;
-	char[] __body;
+	char __body[];
 };
-#ENDIF
+#endif
