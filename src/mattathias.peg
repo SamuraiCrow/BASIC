@@ -8,15 +8,16 @@
 %header {
 #include <string.h>
 #include <malloc.h>
+#include <errno.h>
 
 enum RUNLEVEL {
-	NORMAL,
-	SRCOPEN,
-	STATEHEADOPEN,
-	STATEOPEN,
-	FUNCOPEN,
-	CONSTSOPEN,
-	FILESOPEN
+	R_NORMAL=0,
+	R_SRCOPEN,
+	R_STATEHEADOPEN,
+	R_STATEOPEN,
+	R_FUNCOPEN,
+	R_CONSTSOPEN,
+	R_FILESOPEN
 };
 
 #define COMPILE 1
@@ -24,7 +25,7 @@ enum RUNLEVEL {
 
 /* list of all variable and consant types */
 enum TYPES {
-	T_NONE,
+	T_NONE=0,
 	T_STRING,
 	T_INT,
 	T_FLOAT,
@@ -37,7 +38,8 @@ enum TYPES {
 	T_DOLOOP,
 	T_IF,
 	T_PROCEDURE,
-	T_FUNCTION
+	T_FUNCTION,
+	T_PRINT
 };
 
 struct operands {
@@ -48,16 +50,18 @@ struct operands {
 
 /* list of all compiler errors */
 enum COMPILEERRORS {
-	E_OK,
+	E_OK=0,
 	E_BAD_SYNTAX,
 	E_TYPE_MISMATCH,
-	E_BAD_ALLOC
+	E_BAD_ALLOC,
+	E_INTERNAL
 };
 }
 %source {
 #define PCC_GETCHAR(auxil) fgetc(src)
 #define PCC_ERROR(auxil) shutdown();
 
+void setup();
 void stackdump();
 int shutdown();
 int compile();
@@ -86,18 +90,14 @@ unsigned int idnum = 0;
 unsigned int indentlevel=0;
 unsigned int mode=0;
 
-const struct operands opbase={
-	NULL,
-	T_NONE,
-	0
-};
-struct operands *opstack=&opbase;
+struct operands *opstack=NULL;
 
 const char *COMPILEERRORNAMES[]={
 	"no error",
 	"incorrect syntax",
 	"wrong type",
-	"failed allocation"
+	"failed allocation",
+	"internal compiler error"
 };
 
 const char *TYPENAMES[]={
@@ -114,7 +114,8 @@ const char *TYPENAMES[]={
 	"do loop",
 	"if statement",
 	"procedure statement",
-	"function statement"
+	"function statement",
+	"print sequence"
 };
 
 const char *TYPEFORMATS[]={
@@ -128,9 +129,9 @@ const char *TYPEFORMATS[]={
 };
 }
 
-START			<-	( Line EndOfLine )* Line EndOfFile ~{errorlevel=E_BAD_SYNTAX;}
+START			<-	( Line EndOfLine )* Line EndOfFile
 
-Line				<-	Label? Spacing Statements? Separator?
+Line			<-	Label? Statements? Separator?
 
 Statements		<-	SNGLQUOTE Comment
 					/ Statement (Spacing Separator Statement)* Spacing
@@ -138,7 +139,7 @@ Statements		<-	SNGLQUOTE Comment
 Comment			<-	( !(EndOfLine) .)*
 
 Statement		<-	"REM" Comment
-					/ "PRINT" PrintExpr {parsePrint();}
+					/ "PRINT" {push(T_PRINT);} PrintExpr {parsePrint();}
 					/ "IF" Spacing Expression ElseSequence?
 					/ "ELSE"
 					#elif appears in Amos manual but not in original compiler
@@ -165,33 +166,31 @@ Statement		<-	"REM" Comment
 					/ IntVar Spacing ASSIGN Expression
 					/ !(':' / EndOfLine / EndOfFile) ~{errorlevel=E_BAD_SYNTAX;}
 
-StringVar			<-	< ID StringMark >
+StringVar		<-	< ID StringMark >
 
-FloatVar			<-	< ID Floatmark >
+FloatVar		<-	< ID Floatmark >
 
 IntVar			<-	< ID >
 
-Label			<-	< ID > ':'
+Label			<-	< ID > Separator
 
 ElseSequence		<-	Spacing "THEN" Spacing Statements
 						("ELSE" Spacing Statements)?
 
-StringCond		<-	StringExpr EQUAL StringExpr
-					/ NOTEQUAL StringExpr
-					/ GREATEREQUAL StringExpr
-					/ LESSEQUAL StringExpr
-					/ GREATER StringExpr
-					/ LESS StringExpr
+StringCond		<-	(StringExpr EQUAL StringExpr)
+					/ (NOTEQUAL StringExpr)
+					/ (GREATEREQUAL StringExpr)
+					/ (LESSEQUAL StringExpr)
+					/ (GREATER StringExpr)
+					/ (LESS StringExpr)
 
-LogicExpression	<- 	Sum Spacing ( 
-						(
-						AND Sum
-						/ OR Sum
-						/ XOR Sum
-						)
-					Spacing )*
+LogicExpression		<-		Sum Spacing ( 
+					(AND Sum
+					/ OR Sum
+					/ XOR Sum )
+				Spacing )*
 
-NumCond			<- 	LogicExpression ( EQUAL LogicExpression
+NumCond			<-		LogicExpression ( EQUAL LogicExpression
 					/ NOTEQUAL LogicExpression
 					/ GREATEREQUAL LogicExpression
 					/ LESSEQUAL LogicExpression
@@ -204,53 +203,53 @@ Expression		<-	Cond ( AND Cond
 					/ OR Cond
 					/ XOR Cond )*
 
-PrintExpr			<-	( Spacing PrintVal PRINTSEPARATOR / COMMA )*
+PrintExpr		<-	( Spacing PrintVal PRINTSEPARATOR / COMMA )* PrintVal?
 
-PrintVal			<-	StringExpr
-					/ Expression Spacing
+PrintVal		<-	StringExpr
+				/ Expression Spacing
 
 StringExpr		<-	StringVal Spacing (SIGN StringVal Spacing)*
 
 StringFunction		<-	"CHR"
-					/ "MID"
-					/ "LEFT"
-					/ "RIGHT"
-					/ "SPACE"
+				/ "MID"
+				/ "LEFT"
+				/ "RIGHT"
+				/ "SPACE"
 
 
 StringVal			<-	DBLQUOTE 
 						< ( !(DBLQUOTE / EndOfLine) .)* >
-					DBLQUOTE						{ parseString($1e-$1s, $1); }
+					DBLQUOTE  { parseString($1e-$1s, $1); }
 					/ <StringFunction StringMark> Paramlist
 					/ StringVar Paramlist
 					/ StringVar !ASSIGN
 
-Sum				<-	Product ( Spacing
-						(
-						PLUS Product
-						/ MINUS Product
-						)
-					)*
+Sum			<-	Product ( Spacing
+					(
+					PLUS Product
+					/ MINUS Product
+					)
+				)*
 
-Product			<- Exponent ( Spacing
+Product			<-	Exponent ( Spacing
 					( TIMES  Exponent
 		                	/ DIVIDE Exponent
         		        	/ MODULO Exponent
         		        	)
 				)*
 
-Exponent	<- Value ( Spacing POWER Value )*
+Exponent	<-	Value ( Spacing POWER Value )*
 
 IntFunction		<-	"SGN"
-					/ "SQR"
-					/ "LOG"
-					/ "MIN"
-					/ "MAX"
-					/ "INT"
-					/ "ABS"
-					/ "RND"
+				/ "SQR"
+				/ "LOG"
+				/ "MIN"
+				/ "MAX"
+				/ "INT"
+				/ "ABS"
+				/ "RND"
 
-IntValue			<-	NOT? IntUnary (
+IntValue		<-	NOT? IntUnary (
 					IntFunction Paramlist
 					/ IntVar Paramlist
 					/ IntVar !ASSIGN
@@ -258,24 +257,24 @@ IntValue			<-	NOT? IntUnary (
 				)
 
 FloatFunction		<-	"SGN"
-					/ "SQR"
-					/ "LOG"
-					/ "MIN"
-					/ "MAX"
-					/ "ABS"
-					/ "LN"
-					/ "EXP"
-					/ "SIN"
-					/ "COS"
-					/ "TAN"
-					/ "ASIN"
-					/ "ACOS"
-					/ "ATAN"
-					/ "HSIN"
-					/ "HCOS"
-					/ "HTAN"
+				/ "SQR"
+				/ "LOG"
+				/ "MIN"
+				/ "MAX"
+				/ "ABS"
+				/ "LN"
+				/ "EXP"
+				/ "SIN"
+				/ "COS"
+				/ "TAN"
+				/ "ASIN"
+				/ "ACOS"
+				/ "ATAN"
+				/ "HSIN"
+				/ "HCOS"
+				/ "HTAN"
 
-FloatValue			<-	FloatUnary (
+FloatValue		<-	FloatUnary (
 					FloatFunction Paramlist
 					/ FloatVar Paramlist
 					/ FloatVar !ASSIGN
@@ -286,80 +285,100 @@ Value			<-	FloatValue
 				/ IntValue
 				/ OPEN Expression CLOSE
 
-Float				<-	< SIGN? [0-9]+ '.' [0-9]* (
-						'e' SIGN [0-9]+
-					)? > Spacing
+Float			<-	< SIGN? [0-9]+ '.' [0-9]* (
+					'e' SIGN [0-9]+
+				)? > Spacing
 
-Var				<-	FloatVar
-					/ StringVar
-					/ IntVar
+Var			<-	FloatVar
+				/ StringVar
+				/ IntVar
 
-DimArray			<-	Var Paramlist
+DimArray		<-	Var Paramlist
 
 DimElem			<-	( Var / DimArray ) Spacing
 
 Range			<-	Expression Spacing TO Expression Spacing
 
 #Paramlist denotes a function or an array
-Paramlist			<-	OPEN Expression (Spacing COMMA Expression)* CLOSE
+Paramlist		<-	OPEN Expression (Spacing COMMA Expression)* CLOSE
 
 #these are placeholders for actions later on
-IntUnary			<-	SIGN?
+IntUnary		<-	SIGN?
 
 FloatUnary		<-	SIGN?
 
 # Lexemes
 
-SIGN			<- PLUS / MINUS
-Integer			<- < SIGN? [0-9]+ > Spacing
-ID				<- IdentStart IdentCont*	
-IdentStart		<- [a-zA-Z_]
-IdentCont			<- [a-zA-Z_0-9]
-LESS			<- '<' Spacing
-GREATER			<- '>' Spacing
-LESSEQUAL		<- "<=" Spacing
-GREATEREQUAL	<- ">=" Spacing
-NOTEQUAL		<- "<>" Spacing
-EQUAL			<- '=' Spacing
-ASSIGN			<- '=' Spacing
-PLUS			<- '+' Spacing
-MINUS			<- '-'	 Spacing
-TIMES			<- '*' Spacing
-DIVIDE			<- '/'	 Spacing
-MODULO			<- "MOD"	Spacing
-POWER			<- '^' Spacing
-OPEN			<- '(' Spacing
-CLOSE			<- ')' Spacing
-#SQUAREOPEN		<- '['	 Spacing
-#SQUARECLOSE	<- ']'	 Spacing
-PRINTSEPARATOR	<- ';'  Spacing
-AND				<- "AND" Spacing
-OR				<- "OR" Spacing
-XOR				<- "XOR" Spacing
-NOT				<- "NOT" Spacing
-COMMA			<- ','	 Spacing
-TO				<- "TO" Spacing
-SNGLQUOTE		<- '\''
-DBLQUOTE		<- '\"'
-StringMark		<- '$'
-Floatmark			<- '#'
-Spacing			<- (' ' / '\t')*
-EndOfFile			<- !.
-Separator			<- ':' Spacing
-EndOfLine		<- '\r\n' / '\n' / '\r'
+SIGN			<-	PLUS / MINUS
+Integer			<-	< SIGN? [0-9]+ > Spacing
+ID			<-	IdentStart IdentCont*	
+IdentStart		<-	[a-zA-Z_]
+IdentCont		<-	[a-zA-Z_0-9]
+LESS			<-	'<' Spacing
+GREATER			<-	'>' Spacing
+LESSEQUAL		<-	"<=" Spacing
+GREATEREQUAL		<-	">=" Spacing
+NOTEQUAL		<-	"<>" Spacing
+EQUAL			<-	'=' Spacing
+ASSIGN			<-	'=' Spacing
+PLUS			<-	'+' Spacing
+MINUS			<-	'-' Spacing
+TIMES			<-	'*' Spacing
+DIVIDE			<-	'/' Spacing
+MODULO			<-	"MOD" Spacing
+POWER			<-	'^' Spacing
+OPEN			<-	'(' Spacing
+CLOSE			<-	')' Spacing
+#SQUAREOPEN		<-	'[' Spacing
+#SQUARECLOSE		<-	']' Spacing
+PRINTSEPARATOR		<-	';'  Spacing
+AND			<-	"AND" Spacing
+OR			<-	"OR" Spacing
+XOR			<-	"XOR" Spacing
+NOT			<-	"NOT" Spacing
+COMMA			<-	',' Spacing
+TO			<-	"TO" Spacing
+SNGLQUOTE		<-	'\''
+DBLQUOTE		<-	'\"'
+StringMark		<-	'$'
+Floatmark		<-	'#'
+Spacing			<-	(' ' / '\t')*
+EndOfFile		<-	!.
+Separator		<-	':' Spacing
+EndOfLine		<-	'\r\n' / '\n' / '\r'
 
 %%
 
 void parsePrint() {
-	if (mode&DUMP) logger("print statement");
+	logger("print statement");
 	if (mode&COMPILE) {
-		fprintf(state,"printf(\"%%%s\", const%d);\\n",TYPEFORMATS[opstack->op_type], opstack->op_id);
-		pop();
+		struct operands *op=pop();
+		bool more=true;
+		do {
+			if (op == NULL) {
+				errorlevel=E_INTERNAL;
+				return;
+			}
+			switch (op->op_type) {
+				case T_STRING:
+					fprintf(state,"printf(\"%%%s\", const%d);\\n",TYPEFORMATS[op->op_type], op->op_id);
+					break;
+				case T_PRINT:
+					more=false;
+					break;
+				default:
+					errorlevel=E_INTERNAL;
+					return;
+					break;
+			}
+			free(op);
+			op=pop();
+		} while (more);
 	}
 }
 
 void parseEnd() {
-	if (mode&DUMP) logger("end statement");
+	logger("end statement");
 	if (mode&COMPILE) fprintf(state, "__statevar=__EXIT;\nbreak;\n");
 }
 
@@ -390,8 +409,8 @@ bool push(unsigned int mytype) {
 }
 
 struct operands *pop() {
-	struct operands *op;
-	if (((op=opstack)) && op->op_ret) {
+	struct operands *op=opstack;
+	if (op && op->op_ret) {
 		--indentlevel;
 		opstack=opstack->op_ret;
 		return op;
@@ -402,105 +421,121 @@ struct operands *pop() {
 /* write a note in the logfile */
 void logger(char *contents) {
 	unsigned int count;
-	count=indentlevel;
-	while (count--) fputc('\t', logfile);
-	fprintf(logfile, "%s\n", contents);
+	if (mode&DUMP) {
+		count=indentlevel;
+		while (count > 0) {
+			fputc('\t', logfile);
+			--count;
+		}
+		fprintf(logfile, "%s\n", contents);
+	}
 }
 
 /* Error handler */
 void stackdump() {
-	struct operands *op;
+	struct operands *op=pop();
 	fprintf(stderr, "\nERROR: %s\n\nstackdump:\n", COMPILEERRORNAMES[errorlevel]);
-	while ((op=pop() )) {
+	while (op) {
 		fprintf(stderr, "operand of type %s\nnumber %d\n", TYPENAMES[op->op_type], op->op_id);
 		free(op);
+		op=pop();
+	}
+}
+
+/* open files and initialize them*/
+void setup() {
+	if (mode&COMPILE) {
+		/* compile mode */
+		statehead=fopen("state.h","w");
+		if (statehead) {
+			level=R_STATEHEADOPEN;
+			state=fopen("state.c","w");
+			if (state) {
+				level=R_STATEOPEN;
+				funchead=fopen("functions.h","w");
+				if (funchead) {
+					level=R_FUNCOPEN;
+					consts=fopen("consts.h","w");
+					if (consts) {
+						level=R_CONSTSOPEN;
+						heaphead=fopen("heap.h","w");
+						if (heaphead) {
+							level=R_FILESOPEN;
+					
+							fprintf(statehead,"#include <runtime.h>\nenum __state {__START=__NORMAL");
+							fprintf(heaphead,"#include <runtime.h>\nstruct __heap {\nstruct __subroutine *__callStack;\n");
+							fprintf(state,"#include \"state.h\"\n#include \"consts.h\"\n");
+							fprintf(state,"#include \"heap.h\"\n#include \"functions.h\"\n");
+							fprintf(state,"enum __state __statevar;\nint __stateloop(){\n__statevar=__START;\n");
+							fprintf(state,"do{\nswitch(__statevar){\n");
+						}
+					}
+				}
+			}
+		}
+	}
+	if (mode&DUMP) {
+		/* dump identifier mode */
+		logfile=fopen("parse.log","w");
+		logger("Setup complete.");
 	}
 }
 
 /* shutdown the compiler and exit */
 int shutdown() {
 	int retval=0;
-	if (mode&DUMP && logfile) {
-		fclose(logfile);
-	}
-	if (mode&COMPILE && level == FILESOPEN) {
-		fprintf(statehead, "};\n");
-		fprintf(heaphead,"};\n");
-		fprintf(state,"}\n}while(__statevar>__EXIT);\nreturn __statevar;\n}\n");
-	}
 	if  (errorlevel != E_OK) {
+		logger("Dumping stack.");
 		stackdump();
 		retval=1;
 	}
+	if (mode&DUMP && logfile != NULL) {
+		fprintf(logfile, "Shutting down at runlevel %d and return value %d.\n", level, retval);
+		fclose(logfile);
+	}
 	switch (level) {
-		case FILESOPEN:
+		case R_FILESOPEN:
+			fprintf(statehead, "};\n");
+			fprintf(heaphead,"};\n");
+			fprintf(state,"}\n}while(__statevar>__EXIT);\nreturn __statevar;\n}\n");
 			fclose(heaphead);
-		case CONSTSOPEN:
+		case R_CONSTSOPEN:
 			fclose(consts);
-		case FUNCOPEN:
+		case R_FUNCOPEN:
 			fclose(funchead);
-		case STATEOPEN:
+		case R_STATEOPEN:
 			fclose(state);
-		case STATEHEADOPEN:
+		case R_STATEHEADOPEN:
 			fclose(statehead);
-		case SRCOPEN:
+		case R_SRCOPEN:
 			/*fclose(src);*/
-		case NORMAL:
+		case R_NORMAL:
 			return retval;
-		break;
+			break;
 		default:
 			return 1;
-		break;
+			break;
 	}
 }
 
 /* open files and compile */
 int compile() {
-	level =NORMAL;
+	mb_context_t *ctx;
+	level=R_NORMAL;
 	if (mode) {
-		/*src=fopen(filename, "rb");*/
 		src=stdin;
-		if (src) {
-			level=SRCOPEN;
-			if (mode&COMPILE) {
-				statehead=fopen("state.h","w");
-				if (statehead) {
-					level=STATEHEADOPEN;
-					state=fopen("state.c","w");
-					if (state) {
-						level=STATEOPEN;
-						funchead=fopen("functions.h","w");
-						if (funchead) {
-							level=FUNCOPEN;
-							consts=fopen("consts.h","w");
-							if (consts) {
-								level=CONSTSOPEN;
-								heaphead=fopen("heap.h","w");
-								if (heaphead) {
-									level=FILESOPEN;
-							
-									fprintf(statehead,"#include <runtime.h>\nenum __state {__START=__NORMAL");
-									fprintf(heaphead,"#include <runtime.h>\nstruct __heap {\n");
-									fprintf(state,"#include \"state.h\"\n#include \"consts.h\"\n");
-									fprintf(state,"#include \"heap.h\"\n#include \"functions.h\"\n");
-									fprintf(state,"enum __state __statevar;\nint __stateloop(){\n__statevar=__START;\n");
-									fprintf(state,"do{\nswitch(__statevar){\n");
-								}
-							}
-						}
-					}
-				}
-			}
-			if (mode&DUMP) {
-				/* dump identifier mode */
-				logfile=fopen("parse.log","w");
-			}
-			{
-				mb_context_t *ctx = mb_create(NULL);
-				while(mb_parse(ctx, NULL)){}
-				mb_destroy(ctx);
-			}
-		}
+		/*src=fopen(filename, "rb");
+		if (src) { */
+			level=R_SRCOPEN;
+			setup();
+		
+			/* parse */
+			ctx = mb_create(NULL);
+			while(mb_parse(ctx, NULL)){}
+			mb_destroy(ctx);
+		/*}*/
+	} else {
+		printf("Did nothing.");
 	}
 	return shutdown();
 }
@@ -519,32 +554,35 @@ int main(int argc, char *argv[]) {
 	switch (argc) {
 		case 1:
 			mode=COMPILE;
-			printf("\ncompile initiated\n");
+			printf("\nCompile initiated.\n");
 			return compile();
-		break;
+			break;
 		case 2:
 			if (argv[1][0]=='-') {
 				switch (argv[1][1]) {
 					case 'd':
-						printf("\nidentifier dump initiated\n");
+						printf("\nIdentifier dump initiated.\n");
 						mode=DUMP;
 						return compile();
+						break;
 					case 'v':
 						printf("\n%s version %d.%d.%d", argv[0], 0, 1, 0);
 						return 0;
+						break;
 					case 'V':
-						printf("\nverbose compile\n");
+						printf("\nVerbose compile initiated.\n");
 						mode=DUMP|COMPILE;
 						return compile();
+						break;
 					default:
 						helptext(argv[0]);
-					break;
+						break;
 				}
-				break;
 			}
+			break;
 		default:
 			helptext(argv[0]);
-		break;
+			break;
 	}
 	return 0;
 }

@@ -3,11 +3,6 @@
 */
 
 #include <stdio.h>
-#include "runtime.h"
-#include "consts.h"
-#include "heap.h"
-#include "functions.h"
-#include "state.h"
 
 extern int __stateloop();
 

@@ -10,10 +10,6 @@ struct __subroutine {
 	struct __subroutine *__return;
 };
 
-struct __heap {
-	struct __subroutine *__callStackBase;
-};
-
 /* Base states */
 enum __errors {
 	__RUNTIME_ERROR,
