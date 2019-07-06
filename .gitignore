@@ -1,0 +1,6 @@
+mb.c
+mb.h
+*.o
+release/*
+debug/*
+*.log
