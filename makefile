@@ -19,7 +19,7 @@ mb.c: src/mattathias.peg
 	packcc -omb src/mattathias.peg 
 
 test: debug/mb test/hello.mb
-	debug/mb -d <test/hello.mb 2>parsedebug.log
+	debug/mb -D <test/hello.mb 2>parsedebug.log
 
 build: debug/mb test/hello.mb
 	debug/mb <test/hello.mb 2>parsedebug.log

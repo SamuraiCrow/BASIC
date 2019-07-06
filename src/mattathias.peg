@@ -10,6 +10,10 @@
 #include <malloc.h>
 #include <errno.h>
 
+#define VER_MAJOR 0
+#define VER_MINOR 1
+#define VER_RELEASE 0
+	
 enum RUNLEVEL {
 	R_NORMAL=0,
 	R_SRCOPEN,
@@ -20,8 +24,11 @@ enum RUNLEVEL {
 	R_FILESOPEN
 };
 
+/* flags used internally by the compiler
+	(must be powers of 2) */
 #define COMPILE 1
 #define DUMP 2
+#define DEBUG 4
 
 /* list of all variable and consant types */
 enum TYPES {
@@ -63,6 +70,7 @@ enum COMPILEERRORS {
 
 void setup();
 void stackdump();
+void stackunwind();
 int shutdown();
 int compile();
 void helptext(char *);
@@ -351,7 +359,7 @@ EndOfLine		<-	'\r\n' / '\n' / '\r'
 
 void parsePrint() {
 	logger("print statement");
-	if (mode&COMPILE) {
+	if (mode & COMPILE) {
 		struct operands *op=pop();
 		bool more=true;
 		do {
@@ -379,11 +387,11 @@ void parsePrint() {
 
 void parseEnd() {
 	logger("end statement");
-	if (mode&COMPILE) fprintf(state, "__statevar=__EXIT;\nbreak;\n");
+	if (mode & COMPILE) fprintf(state, "__statevar=__EXIT;\nbreak;\n");
 }
 
 void parseString(int length, const char *text) {
-	if (mode & DUMP) logger("string pushed");
+	logger("string pushed");
 	if (mode & COMPILE) {
 		if (push(T_STRING)) {
 			fprintf(consts, "const unsigned int length%d=%d;\nconst char *constant%d=\"%s\";\n", opstack->op_id, length, opstack->op_id, text);
@@ -421,7 +429,7 @@ struct operands *pop() {
 /* write a note in the logfile */
 void logger(char *contents) {
 	unsigned int count;
-	if (mode&DUMP) {
+	if (mode & DEBUG) {
 		count=indentlevel;
 		while (count > 0) {
 			fputc('\t', logfile);
@@ -442,9 +450,15 @@ void stackdump() {
 	}
 }
 
+/* Unwind and deallocate stack nodes */
+void stackunwind() {
+	struct operands *op;
+	while (((op=pop() ))) free(op);
+}
+
 /* open files and initialize them*/
 void setup() {
-	if (mode&COMPILE) {
+	if (mode & COMPILE) {
 		/* compile mode */
 		statehead=fopen("state.h","w");
 		if (statehead) {
@@ -474,7 +488,7 @@ void setup() {
 			}
 		}
 	}
-	if (mode&DUMP) {
+	if (mode & DUMP) {
 		/* dump identifier mode */
 		logfile=fopen("parse.log","w");
 		logger("Setup complete.");
@@ -488,8 +502,10 @@ int shutdown() {
 		logger("Dumping stack.");
 		stackdump();
 		retval=1;
+	} else {
+		stackunwind();
 	}
-	if (mode&DUMP && logfile != NULL) {
+	if (mode & DUMP && logfile != NULL) {
 		fprintf(logfile, "Shutting down at runlevel %d and return value %d.\n", level, retval);
 		fclose(logfile);
 	}
@@ -544,8 +560,10 @@ int compile() {
 /* print the help text to stdout */
 void helptext(char *commandname) {
 	printf("%s [-d|V|v] < filename.mb\n", commandname);
-	printf("\n where the optional -d is a dump of identifiers to a log file\n");
-	printf("or -V is for a verbose build where the compiler dumps and compiles.\n");
+	printf("Compiles filename.mb by default unless a flag is specified.\n");
+	printf("\n The optional flags are as follows:\n");
+	printf("-d is a dump of identifiers to the parse.log file.\n");
+	printf("-V is for a verbose build where the compiler dumps and compiles.\n");
 	printf("-v prints the version and exits.\n\n");
 }
 
@@ -566,12 +584,17 @@ int main(int argc, char *argv[]) {
 						return compile();
 						break;
 					case 'v':
-						printf("\n%s version %d.%d.%d", argv[0], 0, 1, 0);
+						printf("\n%s version %d.%d.%d\n", argv[0], VER_MAJOR, VER_MINOR, VER_RELEASE);
 						return 0;
 						break;
 					case 'V':
 						printf("\nVerbose compile initiated.\n");
 						mode=DUMP|COMPILE;
+						return compile();
+						break;
+					case 'D':
+						printf("\nCompiler debug and dump mode initiated.\n");
+						mode=DUMP|DEBUG;
 						return compile();
 						break;
 					default:
