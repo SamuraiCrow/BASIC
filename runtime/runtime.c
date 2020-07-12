@@ -1,8 +1,10 @@
-/* Runtime.c v0.1 for BASIC
+/*
+** Runtime.c v0.1 for BASIC
 ** by Samuel D. Crow
 */
 
 #include <stdio.h>
+#include "runtime.h"
 
 extern int __stateloop();
 

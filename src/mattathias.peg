@@ -9,6 +9,8 @@
 #include <string.h>
 #include <malloc.h>
 #include <errno.h>
+#include <compiler.h>
+#include <compiler_protos.h>
 
 #define VER_MAJOR 0
 #define VER_MINOR 1
@@ -17,8 +19,8 @@
 enum RUNLEVEL {
 	R_NORMAL=0,
 	R_SRCOPEN,
-	R_STATEHEADOPEN,
-	R_STATEOPEN,
+	R_STATESOPEN,
+	R_OUTPUTOPEN,
 	R_FUNCOPEN,
 	R_CONSTSOPEN,
 	R_FILESOPEN
@@ -82,10 +84,10 @@ void parsePrint();
 void parseEnd();
 void parseString(int , const char *);
 
-FILE *statehead=NULL;
+FILE *states_h=NULL;
 FILE *state=NULL;
-FILE *funchead=NULL;
-FILE *heaphead=NULL;
+FILE *funcs_h=NULL;
+FILE *heap_h=NULL;
 FILE *consts=NULL;
 FILE *logfile=NULL;
 
@@ -387,7 +389,7 @@ void parsePrint() {
 
 void parseEnd() {
 	logger("end statement");
-	if (mode & COMPILE) fprintf(state, "__statevar=__EXIT;\nbreak;\n");
+	if (mode & COMPILE) fprintf(state, "__state=__EXIT;\nbreak;\n");
 }
 
 void parseString(int length, const char *text) {
@@ -460,28 +462,28 @@ void stackunwind() {
 void setup() {
 	if (mode & COMPILE) {
 		/* compile mode */
-		statehead=fopen("state.h","w");
-		if (statehead) {
-			level=R_STATEHEADOPEN;
-			state=fopen("state.c","w");
-			if (state) {
-				level=R_STATEOPEN;
-				funchead=fopen("functions.h","w");
-				if (funchead) {
+		states_h=fopen("state.h","w");
+		if (states_h) {
+			level=R_STATESOPEN;
+			output_c=fopen("output.c","w");
+			if (output_c) {
+				level=R_OUTPUTOPEN;
+				funcs_h=fopen("functions.h","w");
+				if (funcs_h) {
 					level=R_FUNCOPEN;
 					consts=fopen("consts.h","w");
 					if (consts) {
 						level=R_CONSTSOPEN;
-						heaphead=fopen("heap.h","w");
-						if (heaphead) {
+						heap_h=fopen("heap.h","w");
+						if (heap_h) {
 							level=R_FILESOPEN;
 					
-							fprintf(statehead,"#include <runtime.h>\nenum __state {__START=__NORMAL");
-							fprintf(heaphead,"#include <runtime.h>\nstruct __heap {\nstruct __subroutine *__callStack;\n");
-							fprintf(state,"#include \"state.h\"\n#include \"consts.h\"\n");
-							fprintf(state,"#include \"heap.h\"\n#include \"functions.h\"\n");
-							fprintf(state,"enum __state __statevar;\nint __stateloop(){\n__statevar=__START;\n");
-							fprintf(state,"do{\nswitch(__statevar){\n");
+							fprintf(states_h,"#include <runtime.h>\nenum __states {__START=__NORMAL");
+							fprintf(heap_h,"#include <runtime.h>\nstruct __heap {\nstruct __subroutine *__callStack;\n");
+							fprintf(output_c,"#include \"state.h\"\n#include \"consts.h\"\n");
+							fprintf(output_c,"#include \"heap.h\"\n#include \"functions.h\"\n");
+							fprintf(output_c,"enum __states __state;\nint __stateloop(){\n__state=__START;\n");
+							fprintf(output_c,"do{\nswitch(__state){\n");
 						}
 					}
 				}
@@ -511,18 +513,18 @@ int shutdown() {
 	}
 	switch (level) {
 		case R_FILESOPEN:
-			fprintf(statehead, "};\n");
-			fprintf(heaphead,"};\n");
-			fprintf(state,"}\n}while(__statevar>__EXIT);\nreturn __statevar;\n}\n");
-			fclose(heaphead);
+			fprintf(states_h, "};\n");
+			fprintf(heap_h,"};\n");
+			fprintf(output_c,"}\n}while(__state>__EXIT);\nreturn __state;\n}\n");
+			fclose(heap_h);
 		case R_CONSTSOPEN:
 			fclose(consts);
 		case R_FUNCOPEN:
-			fclose(funchead);
+			fclose(funcs_h);
 		case R_STATEOPEN:
-			fclose(state);
-		case R_STATEHEADOPEN:
-			fclose(statehead);
+			fclose(output_c);
+		case R_states_hOPEN:
+			fclose(states_h);
 		case R_SRCOPEN:
 			/*fclose(src);*/
 		case R_NORMAL:
@@ -551,7 +553,7 @@ int compile() {
 			mb_destroy(ctx);
 		/*}*/
 	} else {
-		printf("Did nothing.");
+		printf("Did nothing.\n");
 	}
 	return shutdown();
 }

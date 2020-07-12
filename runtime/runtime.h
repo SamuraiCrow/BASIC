@@ -2,24 +2,28 @@
 ** by Samuel D. Crow
 */
 
-#ifndef __RUNTIME__
-#define __RUNTIME__
-
-/* Base structures */
-struct __subroutine {
-	struct __subroutine *__return;
-};
+#ifndef __RUNTIME_H__
+#define __RUNTIME_H__
 
 /* Base states */
-enum __errors {
-	__RUNTIME_ERROR,
+enum __errors
+{
+	__NORMAL,
 	__EXIT,
-	__NORMAL
+	__RUNTIME_ERROR
 };
 
 /* BASIC strings */
-struct __string {
+struct __string
+{
 	unsigned int __length;
 	char __body[];
 };
+
+struct __subroutine
+{
+	unsigned int __prev;
+	unsigned int __retLabel;
+};
+
 #endif
