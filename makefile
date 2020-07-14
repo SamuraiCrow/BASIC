@@ -6,10 +6,10 @@ debug/mb: obj/mbdebug.o
 release/mb: obj/mb.o
 	gcc obj/mb.o -o release/mb
 
-obj/mbdebug.o: mb.c mb.h
+obj/mbdebug.o: mb.c
 	gcc mb.c -g -c -o obj/mbdebug.o -Wall --pedantic -std=gnu99
 
-obj/mb.o: mb.c mb.h
+obj/mb.o: mb.c
 	gcc mb.c -c -Os -o obj/mb.o -Wall --pedantic -std=gnu99
 
 obj/runtimedebug.o: debug/mb runtime/runtime.h runtime/runtime.c

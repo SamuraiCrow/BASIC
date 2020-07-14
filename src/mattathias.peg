@@ -9,8 +9,7 @@
 #include <string.h>
 #include <malloc.h>
 #include <errno.h>
-#include <compiler.h>
-#include <compiler_protos.h>
+#include "runtime/runtime.h"
 
 #define VER_MAJOR 0
 #define VER_MINOR 1
@@ -33,7 +32,8 @@ enum RUNLEVEL {
 #define DEBUG 4
 
 /* list of all variable and consant types */
-enum TYPES {
+enum TYPES
+{
 	T_NONE=0,
 	T_STRING,
 	T_INT,
@@ -41,20 +41,68 @@ enum TYPES {
 	T_STRINGVAR,
 	T_INTVAR,
 	T_FLOATVAR,
+	T_PRINT,
+	T_PRINTSEPARATOR,
 	T_WHILELOOP,
 	T_FORLOOP,
 	T_REPEATLOOP,
 	T_DOLOOP,
 	T_IF,
 	T_PROCEDURE,
-	T_FUNCTION,
-	T_PRINT
+	T_FUNCTION
 };
 
-struct operands {
+enum SEPARATORS
+{
+	S_NONE=0,
+	S_COMMA,
+	S_SEMICOLON,
+	S_LINEFEED
+};
+
+struct operands
+{
 	struct operands *op_ret;
 	unsigned int op_type;
 	unsigned int op_id;
+};
+
+/* variable type */
+struct box
+{
+	struct operands op_;
+	char *box_name;
+};
+
+struct repeatLoop
+{
+    struct operands op_;
+};
+
+struct whileLoop
+{
+    struct repeatLoop wl_loop;
+    int condition;
+};
+
+struct conditional 
+{
+    struct operands op_;
+};
+
+struct printSeparator
+{
+	struct operands op_;
+	struct operands *ps_item;
+	struct printSeparator *ps_next;
+	enum SEPARATORS ps_kind;
+};
+
+struct printStatement
+{
+	struct operands op_;
+	struct printSeparator *ps_separator;
+	struct printSeparator **ps_end;
 };
 
 /* list of all compiler errors */
@@ -63,50 +111,69 @@ enum COMPILEERRORS {
 	E_BAD_SYNTAX,
 	E_TYPE_MISMATCH,
 	E_BAD_ALLOC,
+	E_STACK_UNDERFLOW,
 	E_INTERNAL
 };
 }
 %source {
 #define PCC_GETCHAR(auxil) fgetc(src)
-#define PCC_ERROR(auxil) shutdown();
 
-void setup();
-void stackdump();
-void stackunwind();
-int shutdown();
-int compile();
-void helptext(char *);
-bool push(unsigned int type);
+void setUp();
+void shutDown();
+void compile();
+void helpText(char *);
+void push(struct operands *);
 struct operands *pop();
 char getInput(char *);
 void logger(char *);
-void parsePrint();
-void parseEnd();
-void parseString(int , const char *);
+void initPrint(struct printStatement *);
+void initEnd();
+void generateString(int , const char *);
+void initConditional(struct conditional *, int);
+void elseConditional(struct conditional *);
+void endConditional(struct conditional *);
+void generateJump(char *, unsigned int);
+void generateConditionalJump(char *, unsigned int, int);
+void generateLabel(char *, unsigned int);
+void initWhileLoop(struct whileLoop *, int);
+void endWhileLoop(struct whileLoop *);
+void initRepeatLoop(struct repeatLoop *);
+void endRepeatLoop(struct repeatLoop *, int);
+void initDoLoop(struct operands *);
+void endDoLoop(struct operands *);
+void generateBreak();
+void initOp(struct operands *self);
+void endOp(struct operands *self);
+void generateSubroutineCall(unsigned int);
+void generateReturn();
+void endPrintSeparator(struct printSeparator *);
+void endPrint(struct printStatement *);
+struct operands *allocOp(size_t);
 
 FILE *states_h=NULL;
-FILE *state=NULL;
+FILE *output_c=NULL;
 FILE *funcs_h=NULL;
 FILE *heap_h=NULL;
-FILE *consts=NULL;
+FILE *consts_h=NULL;
 FILE *logfile=NULL;
 
 FILE *src=NULL;
 
 enum RUNLEVEL level;
-enum COMPILEERRORS errorlevel=E_OK;
+enum COMPILEERRORS errorLevel=E_OK;
 
-unsigned int idnum = 0;
-unsigned int indentlevel=0;
+unsigned int idNum = 0;
+unsigned int indentLevel=0;
 unsigned int mode=0;
 
-struct operands *opstack=NULL;
+struct operands *opStack=NULL;
 
 const char *COMPILEERRORNAMES[]={
 	"no error",
 	"incorrect syntax",
 	"wrong type",
 	"failed allocation",
+	"stack underflow",
 	"internal compiler error"
 };
 
@@ -118,25 +185,17 @@ const char *TYPENAMES[]={
 	"string variable",
 	"integer variable",
 	"floating point variable",
+	"print sequence",
+	"print separator",
 	"while loop",
 	"for loop",
 	"repeat loop",
 	"do loop",
 	"if statement",
 	"procedure statement",
-	"function statement",
-	"print sequence"
+	"function statement"
 };
 
-const char *TYPEFORMATS[]={
-	"",
-	"s",
-	"d",
-	"f",
-	"s",
-	"d",
-	"f"
-};
 }
 
 START			<-	( Line EndOfLine )* Line EndOfFile
@@ -149,7 +208,15 @@ Statements		<-	SNGLQUOTE Comment
 Comment			<-	( !(EndOfLine) .)*
 
 Statement		<-	"REM" Comment
-					/ "PRINT" {push(T_PRINT);} PrintExpr {parsePrint();}
+					/ "PRINT"
+						{
+							push(allocOp(sizeof(struct printStatement)));
+							initPrint((struct printStatement *)opStack);
+						}
+						PrintExpr
+						{
+							endPrint((struct printStatement *)opStack);
+						}
 					/ "IF" Spacing Expression ElseSequence?
 					/ "ELSE"
 					#elif appears in Amos manual but not in original compiler
@@ -170,11 +237,11 @@ Statement		<-	"REM" Comment
 					/ "DEC" Spacing IntVar
 					/ "ADD" Spacing IntVar Spacing COMMA Expression
 						( Spacing COMMA Range )?
-					/ "END" {parseEnd();}
+					/ "END" {initEnd();}
 					/ StringVar Spacing ASSIGN StringExpr
 					/ FloatVar Spacing ASSIGN Expression
 					/ IntVar Spacing ASSIGN Expression
-					/ !(':' / EndOfLine / EndOfFile) ~{errorlevel=E_BAD_SYNTAX;}
+					/ !(':' / EndOfLine / EndOfFile) ~{errorLevel=E_BAD_SYNTAX;}
 
 StringVar		<-	< ID StringMark >
 
@@ -215,7 +282,7 @@ Expression		<-	Cond ( AND Cond
 
 PrintExpr		<-	( Spacing PrintVal PRINTSEPARATOR / COMMA )* PrintVal?
 
-PrintVal		<-	StringExpr
+PrintVal		<-	StringExpr 
 				/ Expression Spacing
 
 StringExpr		<-	StringVal Spacing (SIGN StringVal Spacing)*
@@ -229,7 +296,7 @@ StringFunction		<-	"CHR"
 
 StringVal			<-	DBLQUOTE 
 						< ( !(DBLQUOTE / EndOfLine) .)* >
-					DBLQUOTE  { parseString($1e-$1s, $1); }
+					DBLQUOTE  { generateString($1e-$1s, $1); }
 					/ <StringFunction StringMark> Paramlist
 					/ StringVar Paramlist
 					/ StringVar !ASSIGN
@@ -358,82 +425,284 @@ Separator		<-	':' Spacing
 EndOfLine		<-	'\r\n' / '\n' / '\r'
 
 %%
-
-void parsePrint() {
-	logger("print statement");
-	if (mode & COMPILE) {
-		struct operands *op=pop();
-		bool more=true;
-		do {
-			if (op == NULL) {
-				errorlevel=E_INTERNAL;
-				return;
-			}
-			switch (op->op_type) {
-				case T_STRING:
-					fprintf(state,"printf(\"%%%s\", const%d);\\n",TYPEFORMATS[op->op_type], op->op_id);
-					break;
-				case T_PRINT:
-					more=false;
-					break;
-				default:
-					errorlevel=E_INTERNAL;
-					return;
-					break;
-			}
-			free(op);
-			op=pop();
-		} while (more);
+void intToString()
+{
+	struct operands *op;
+	if (opStack->op_type!=T_INT)
+	{
+		errorLevel=E_INTERNAL;
+		exit(1);
 	}
+	op=pop();
+	fprintf(output_c,"snprintf(stringBuffer, \"%%d\", k%d);\n", op->op_id);
+	free(op);
 }
 
-void parseEnd() {
-	logger("end statement");
-	if (mode & COMPILE) fprintf(state, "__state=__EXIT;\nbreak;\n");
+void initPrint(struct printStatement *self)
+{
+	logger("print statement");
+	initOp((struct operands *)self);
+	self->op_.op_type=T_PRINT;
+	self->ps_separator=NULL;
+	self->ps_end=NULL;
 }
 
-void parseString(int length, const char *text) {
-	logger("string pushed");
-	if (mode & COMPILE) {
-		if (push(T_STRING)) {
-			fprintf(consts, "const unsigned int length%d=%d;\nconst char *constant%d=\"%s\";\n", opstack->op_id, length, opstack->op_id, text);
-		} else {
-			errorlevel=E_BAD_ALLOC;
+void endPrint(struct printStatement *self)
+{
+	struct printSeparator *iter=self->ps_separator;
+	logger("print processing");
+	while (iter)
+	{
+		endPrintSeparator(iter);
+		switch(iter->ps_kind)
+		{
+			case S_COMMA:
+				fprintf(output_c,"putc(\'\\t\');\n");
+				break;
+			case S_LINEFEED:
+				fprintf(output_c,"puts(\"\\n\");\n");
+				break;
+			default:
+				break;
 		}
 	}
 }
 
-/* stack support for operand stack */
-bool push(unsigned int mytype) {
-	struct operands *op=(struct operands *)malloc(sizeof(struct operands));
-	if (op) {
-		++indentlevel;
-		op->op_type=mytype;
-		++idnum;
-		op->op_id=idnum;
-		op->op_ret=opstack;
-		opstack=op;
-		return true;
+/*
+** printSeparator structures are stored as if they were subcommands of the 
+** printStatement structure itself.  They are added to a linked list of
+** other printSeparators leading back to the printStatement.
+*/
+void initPrintSeparator(struct printSeparator *self, enum SEPARATORS sep)
+{
+	struct printStatement *op;
+	initOp((struct operands *)self);
+	self->op_.op_type=T_PRINTSEPARATOR;
+	self->ps_kind=sep;
+	self->ps_next=NULL;
+	if (opStack->op_type != T_PRINT) 
+	{
+		self->ps_item=pop();
 	}
-	return false;
+	if (opStack->op_type == T_PRINT)	
+	{
+		op=(struct printStatement *)opStack;
+		self->ps_item=NULL;
+		if (op->ps_end)
+		{
+			(*op->ps_end)->ps_next=self;
+			op->ps_end=&self->ps_next;
+		} else
+		{
+			op->ps_separator=self;
+			op->ps_end=&op->ps_separator;
+		}
+		return;
+	}
+
 }
 
-struct operands *pop() {
-	struct operands *op=opstack;
-	if (op && op->op_ret) {
-		--indentlevel;
-		opstack=opstack->op_ret;
+void endPrintSeparator(struct printSeparator *self)
+{
+	/*TODO: Sort the types of all the operands to convert them
+	  to strings and print them.*/
+}
+void generateString(int length, const char *text)
+{
+	logger("string pushed");
+	if (mode & COMPILE)
+	{
+		push(allocOp(sizeof(struct operands)));
+		initOp(opStack);
+		opStack->op_type=T_STRING;
+		fprintf(consts_h, "struct __string str%d={__length=%d;\n__body=\"%s\";\n};\n", opStack->op_id, length, text);
+	}
+}
+
+void generateInt(struct operands *t, char *s)
+{
+	initOp(t);
+	t->op_type=T_INT;
+	fprintf(consts_h, "const int k%d=%s;\n", t->op_id, s);
+}
+
+void generateFloat(struct operands *t, char *s)
+{
+	initOp(t);
+	t->op_type=T_FLOAT;
+	fprintf(consts_h, "const float k%d=%s;\n", t->op_id, s);
+}
+
+void generateLabel(char *prefix, unsigned int op_id)
+{
+    fprintf(output_c, "case %s%u:\n",prefix, op_id);
+    fprintf(states_h, ",\n%s%u",prefix, op_id);
+}
+
+void generateJump(char *prefix, unsigned int op_id)
+{
+    fprintf(output_c, "state=%s%u;\nbreak;\n", prefix, op_id);
+}
+
+void generateConditionalJump(char *prefix, unsigned int op_id, int condition)
+{
+    fprintf(output_c, "if (%d)\n{\n state=%s%u;\nbreak;\n}\n", condition, prefix, op_id);
+}
+
+struct operands *allocOp(size_t size)
+{
+	struct operands *op=(struct operands *)malloc(size);
+	if (op) return op;
+	errorLevel=E_BAD_ALLOC;
+	exit(1);
+}
+
+void initEnd()
+{
+	logger("end statement");
+	if (mode & COMPILE) fprintf(output_c, "__state=__EXIT;\nbreak;\n");
+}
+
+void initOp(struct operands *self)
+{
+    /* index block according to count */
+    self->op_id=idNum;
+    idNum++;
+
+    /* add block to stack */
+    self->op_ret=opStack;
+    opStack=self;
+}
+
+void endOp(struct operands *self)
+{
+    opStack=self->op_ret;
+	free(self);
+}
+
+void initRepeatLoop(struct repeatLoop *self)
+{
+    initOp((struct operands *)self);
+    self->op_.op_type=T_REPEATLOOP;
+    generateLabel("loopStart", self->op_.op_id);
+}
+
+void endRepeatLoop(struct repeatLoop *self, int condition)
+{
+    generateConditionalJump("loopStart", self->op_.op_id, condition);
+    generateLabel("loopend", self->op_.op_id);
+}
+
+/* TODO: convert cond and condition to an expression */
+void initWhileLoop(struct whileLoop *self, int cond)
+{
+    initOp((struct operands *)self);
+    self->wl_loop.op_.op_type=T_WHILELOOP;
+    self->condition=cond;
+    generateJump("loopinit", self->wl_loop.op_.op_id);
+    generateLabel("loopstart", self->wl_loop.op_.op_id);
+}
+
+/*TODO: Convert condition into an expression */
+void endWhileLoop(struct whileLoop *self)
+{
+    endRepeatLoop((struct repeatLoop *)self, self->condition);
+}
+
+void initDoLoop(struct operands *self)
+{
+    initOp(self);
+    self->op_type=T_DOLOOP;
+    generateLabel("loopstart", self->op_id);
+}
+
+void endDoLoop(struct operands *self)
+{
+    generateJump("loopstart", self->op_id);
+    generateLabel("loopend", self->op_id);
+}
+
+void generateBreak()
+{
+    switch (opStack->op_type)
+	{
+		case T_DOLOOP:
+        case T_WHILELOOP:
+        case T_REPEATLOOP:
+	        generateJump("loopend", opStack->op_id);
+			break;
+		case T_IF:
+	        generateJump("condend", opStack->op_id);
+			break;
+		default:
+			errorLevel=E_BAD_SYNTAX;
+			break;
+    }
+}
+
+void initConditional(struct conditional *self, int condition)
+{
+    initOp((struct operands *)self);
+    self->op_.op_type=T_IF;
+    generateLabel("condstart", self->op_.op_id);
+    generateConditionalJump("condelse", self->op_.op_id, condition);
+}
+
+void elseConditional(struct conditional *self)
+{
+    generateJump("condend", self->op_.op_id);
+    generateLabel("condelse", self->op_.op_id);
+}
+
+void endConditional(struct conditional *self)
+{
+    generateLabel("condend", self->op_.op_id);
+}
+
+void generateSubroutineCall(unsigned int labelNum)
+{
+    unsigned int retLabel=idNum;
+    idNum++;
+    fprintf(output_c, 
+        "self->prev=callstack;\ncallStack=return%u;\nstate=label%u;\nbreak;\n",
+        retLabel, labelNum);
+    generateLabel("return", retLabel);
+}
+
+void generateReturn()
+{
+    fprintf(output_c, "state=callstack;callstack=self->prev\nbreak;\n");
+}
+
+/* stack support for operand stack */
+void push(struct operands *op)
+{
+	++indentLevel;
+	opStack=op;
+}
+
+struct operands *pop()
+{
+	struct operands *op=opStack;
+	if (op)
+	{
+		--indentLevel;
+		opStack=opStack->op_ret;
 		return op;
 	}
-	return NULL;
+	errorLevel=E_STACK_UNDERFLOW;
+	exit(1);
 }
 
 /* write a note in the logfile */
-void logger(char *contents) {
+void logger(char *contents)
+{
 	unsigned int count;
-	if (mode & DEBUG) {
-		count=indentlevel;
-		while (count > 0) {
+	if (mode & DEBUG)
+	{
+		count=indentLevel;
+		while (count > 0)
+		{
 			fputc('\t', logfile);
 			--count;
 		}
@@ -441,41 +710,31 @@ void logger(char *contents) {
 	}
 }
 
-/* Error handler */
-void stackdump() {
-	struct operands *op=pop();
-	fprintf(stderr, "\nERROR: %s\n\nstackdump:\n", COMPILEERRORNAMES[errorlevel]);
-	while (op) {
-		fprintf(stderr, "operand of type %s\nnumber %d\n", TYPENAMES[op->op_type], op->op_id);
-		free(op);
-		op=pop();
-	}
-}
-
-/* Unwind and deallocate stack nodes */
-void stackunwind() {
-	struct operands *op;
-	while (((op=pop() ))) free(op);
-}
-
 /* open files and initialize them*/
-void setup() {
-	if (mode & COMPILE) {
+void setUp()
+{
+	if (mode & COMPILE)
+	{
 		/* compile mode */
 		states_h=fopen("state.h","w");
-		if (states_h) {
+		if (states_h)
+		{
 			level=R_STATESOPEN;
 			output_c=fopen("output.c","w");
-			if (output_c) {
+			if (output_c)
+			{
 				level=R_OUTPUTOPEN;
 				funcs_h=fopen("functions.h","w");
-				if (funcs_h) {
+				if (funcs_h)
+				{
 					level=R_FUNCOPEN;
-					consts=fopen("consts.h","w");
-					if (consts) {
+					consts_h=fopen("consts.h","w");
+					if (consts_h)
+					{
 						level=R_CONSTSOPEN;
 						heap_h=fopen("heap.h","w");
-						if (heap_h) {
+						if (heap_h)
+						{
 							level=R_FILESOPEN;
 					
 							fprintf(states_h,"#include <runtime.h>\nenum __states {__START=__NORMAL");
@@ -490,7 +749,8 @@ void setup() {
 			}
 		}
 	}
-	if (mode & DUMP) {
+	if (mode & DUMP)
+	{
 		/* dump identifier mode */
 		logfile=fopen("parse.log","w");
 		logger("Setup complete.");
@@ -498,115 +758,139 @@ void setup() {
 }
 
 /* shutdown the compiler and exit */
-int shutdown() {
-	int retval=0;
-	if  (errorlevel != E_OK) {
-		logger("Dumping stack.");
-		stackdump();
-		retval=1;
-	} else {
-		stackunwind();
+void shutDown()
+{
+	struct operands *op=opStack;
+	if  (errorLevel != E_OK)
+	{
+		fprintf(stderr, "\nERROR: %s\n\n", COMPILEERRORNAMES[errorLevel]);
 	}
-	if (mode & DUMP && logfile != NULL) {
-		fprintf(logfile, "Shutting down at runlevel %d and return value %d.\n", level, retval);
+	if (op)
+	{
+		logger("Dumping stack.");
+		do
+		{
+			if (mode & DUMP && logfile != NULL)
+			{
+				fprintf(logfile,"operand of type %s\nnumber %d\n", TYPENAMES[op->op_type], op->op_id);
+			}
+			free(op);
+			op=pop();
+		} while (op);
+	} else
+	{
+		logger("Stack was empty");
+	}
+	if (mode & DUMP && logfile != NULL)
+	{
+		fprintf(logfile, "Shutting down at runlevel %d.\n", level);
 		fclose(logfile);
 	}
-	switch (level) {
+	switch (level)
+	{
 		case R_FILESOPEN:
 			fprintf(states_h, "};\n");
 			fprintf(heap_h,"};\n");
 			fprintf(output_c,"}\n}while(__state>__EXIT);\nreturn __state;\n}\n");
 			fclose(heap_h);
 		case R_CONSTSOPEN:
-			fclose(consts);
+			fclose(consts_h);
 		case R_FUNCOPEN:
 			fclose(funcs_h);
-		case R_STATEOPEN:
+		case R_OUTPUTOPEN:
 			fclose(output_c);
-		case R_states_hOPEN:
+		case R_STATESOPEN:
 			fclose(states_h);
 		case R_SRCOPEN:
 			/*fclose(src);*/
 		case R_NORMAL:
-			return retval;
 			break;
 		default:
-			return 1;
+			fprintf(stderr, "Unknown run level encountered\n");
 			break;
 	}
 }
 
 /* open files and compile */
-int compile() {
+void compile()
+{
 	mb_context_t *ctx;
 	level=R_NORMAL;
-	if (mode) {
+	if (mode)
+	{
 		src=stdin;
 		/*src=fopen(filename, "rb");
-		if (src) { */
+		if (src)
+		{ */
 			level=R_SRCOPEN;
-			setup();
+			setUp();
 		
 			/* parse */
 			ctx = mb_create(NULL);
-			while(mb_parse(ctx, NULL)){}
+			while(mb_parse(ctx, NULL)){logger("done");}
 			mb_destroy(ctx);
 		/*}*/
 	} else {
 		printf("Did nothing.\n");
 	}
-	return shutdown();
+	shutDown();
 }
 
 
 /* print the help text to stdout */
-void helptext(char *commandname) {
-	printf("%s [-d|V|v] < filename.mb\n", commandname);
+void helpText(char *commandname)
+{
+	printf("%s [-d|D|V|v] < filename.mb\n", commandname);
 	printf("Compiles filename.mb by default unless a flag is specified.\n");
 	printf("\n The optional flags are as follows:\n");
 	printf("-d is a dump of identifiers to the parse.log file.\n");
+	printf("-D is a dump of identifiers and debug build.\n");
 	printf("-V is for a verbose build where the compiler dumps and compiles.\n");
 	printf("-v prints the version and exits.\n\n");
 }
 
 /* process command line parameters */
-int main(int argc, char *argv[]) {
-	switch (argc) {
+int main(int argc, char *argv[])
+{
+	atexit(shutDown);
+	switch (argc)
+	{
 		case 1:
 			mode=COMPILE;
 			printf("\nCompile initiated.\n");
-			return compile();
+			compile();
 			break;
 		case 2:
-			if (argv[1][0]=='-') {
-				switch (argv[1][1]) {
+			if (argv[1][0]=='-')
+			{
+				switch (argv[1][1])
+				{
 					case 'd':
 						printf("\nIdentifier dump initiated.\n");
 						mode=DUMP;
-						return compile();
+						compile();
 						break;
 					case 'v':
 						printf("\n%s version %d.%d.%d\n", argv[0], VER_MAJOR, VER_MINOR, VER_RELEASE);
-						return 0;
 						break;
 					case 'V':
 						printf("\nVerbose compile initiated.\n");
 						mode=DUMP|COMPILE;
-						return compile();
+						compile();
 						break;
 					case 'D':
 						printf("\nCompiler debug and dump mode initiated.\n");
 						mode=DUMP|DEBUG;
-						return compile();
+						compile();
 						break;
 					default:
-						helptext(argv[0]);
+						helpText(argv[0]);
 						break;
 				}
 			}
 			break;
 		default:
-			helptext(argv[0]);
+			helpText(argv[0]);
 			break;
 	}
 	return 0;

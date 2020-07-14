@@ -26,4 +26,5 @@ struct __subroutine
 	unsigned int __retLabel;
 };
 
+char *__stringBuffer[256];
 #endif
