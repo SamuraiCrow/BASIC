@@ -18,13 +18,7 @@ struct __string
 {
 	unsigned int __length;
 	char __body[];
-};
-
-struct __subroutine
-{
-	unsigned int __prev;
-	unsigned int __retLabel;
-};
+}empty={0,""};
 
 char *__stringBuffer[256];
 #endif
