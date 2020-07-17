@@ -18,7 +18,7 @@ struct __string
 {
 	unsigned int __length;
 	char __body[];
-}empty={0,""};
+}__EMPTY={0,""};
 
 char *__stringBuffer[256];
 #endif

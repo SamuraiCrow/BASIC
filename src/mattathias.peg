@@ -60,6 +60,7 @@ enum TYPES
 	T_LABEL
 };
 
+/* subtypes of the T_PRINTSEPARATOR type */
 enum SEPARATORS
 {
 	S_NONE=0,
@@ -80,6 +81,7 @@ enum OPERATORS
 	O_EXPONENT
 };
 
+/* internal states used by the paser */
 struct operands
 {
 	struct operands *op_prev;
@@ -91,7 +93,7 @@ struct operands
 struct box
 {
 	struct operands op_;
-	char *box_name;
+	const char *box_name;
 	unsigned int box_length;
 };
 
@@ -126,7 +128,12 @@ struct printStatement
 	struct printSeparator **ps_end;
 };
 
-/* list of all compiler errors */
+/* 
+** list of all compiler errors 
+**
+** Note:  There must be a corresponding error message
+** to each entry in the COMPILEERRORNAMES constant array.
+*/
 enum COMPILEERRORS {
 	E_OK=0,
 	E_BAD_SYNTAX,
@@ -151,7 +158,7 @@ char getInput(char *);
 void logger(char *);
 void initPrint(struct printStatement *);
 void initEnd();
-void generateString(int , const char *);
+void generateString(const char *, int);
 void initConditional(struct conditional *, int);
 void elseConditional(struct conditional *);
 void endConditional(struct conditional *);
@@ -171,9 +178,8 @@ void generateSubroutineCall(unsigned int);
 void generateReturn();
 void endPrintSeparator(struct printSeparator *);
 void endPrint(struct printStatement *);
-void generateOrGetIntVar(char *, unsigned int);
-void generateOrGetFloatVar(char *, unsigned int);
-void generateOrGetStringVar(char *, unsigned int);
+void generateOrGetVar(const char *, unsigned int, enum TYPES);
+void parseLabel(const char *, unsigned int);
 struct operands *allocOp(size_t);
 
 FILE *states_h=NULL;
@@ -197,6 +203,7 @@ struct hashmap_s idHash;
 struct hashmap_s localHash;
 bool scopeGlobal=true;
 
+/* These correspond to the enum COMPILEERRORS. */
 const char *COMPILEERRORNAMES[]={
 	"no error",
 	"incorrect syntax",
@@ -207,6 +214,7 @@ const char *COMPILEERRORNAMES[]={
 	"duplicated label"
 };
 
+/* These correspond to the types of enum TYPES. */
 const char *TYPENAMES[]={
 	"none",
 	"string",
@@ -243,7 +251,7 @@ Comment			<-	( !(EndOfLine) .)* EndOfLine?
 Statement		<-	"REM" Spacing Comment
 					/ "PRINT"
 						{
-							push(allocOp(sizeof(struct printStatement)));
+							push((struct operands *)allocOp(sizeof(struct printStatement)));
 							initPrint((struct printStatement *)opStack);
 						}
 						PrintExpr
@@ -276,11 +284,11 @@ Statement		<-	"REM" Spacing Comment
 					/ IntVar Spacing ASSIGN Expression
 					/ !(':' / EndOfLine / EndOfFile) ~{errorLevel=E_BAD_SYNTAX;}
 
-StringVar		<-	< ID StringMark >{generateOrGetStringVar($1,$1e-$1s);}
+StringVar		<-	< ID StringMark >{generateOrGetVar($1,$1e-$1s,T_STRING);}
 
-FloatVar		<-	< ID Floatmark >{generateOrGetFloatVar($1,$1e-$1s);}
+FloatVar		<-	< ID Floatmark >{generateOrGetVar($1,$1e-$1s,T_FLOAT);}
 
-IntVar			<-	< ID >{generateOrGetIntVar($1,$1e-$1s);}
+IntVar			<-	< ID >{generateOrGetVar($1,$1e-$1s,T_INT);}
 
 Label			<-	< ID > Separator {parseLabel($1,$1e-$1s);}
 
@@ -329,7 +337,7 @@ StringFunction		<-	"CHR"
 
 StringVal			<-	DBLQUOTE 
 						< ( !(DBLQUOTE / EndOfLine) .)* >
-					DBLQUOTE  { generateString($1e-$1s, $1); }
+					DBLQUOTE  { generateString($1, $1e-$1s); }
 					/ <StringFunction StringMark> Paramlist
 					/ StringVar Paramlist
 					/ StringVar !ASSIGN
@@ -459,7 +467,7 @@ EndOfLine		<-	'\r\n' / '\n' / '\r'
 
 %%
 // parses linenumbers as well as labels
-void parseLabel(char *text, unsigned int textLen)
+void parseLabel(const char *text, unsigned int textLen)
 {
 	struct operands *self=hashmap_get(&idHash, text, textLen);
 	if (self==NULL)
@@ -494,7 +502,7 @@ void intToString()
 void initPrint(struct printStatement *self)
 {
 	logger("print statement");
-	initOp((struct operands *)self);
+	initOp(&self->op_);
 	self->op_.op_type=T_PRINT;
 	self->ps_separator=NULL;
 	self->ps_end=NULL;
@@ -529,7 +537,7 @@ void endPrint(struct printStatement *self)
 void initPrintSeparator(struct printSeparator *self, enum SEPARATORS sep)
 {
 	struct printStatement *op;
-	initOp((struct operands *)self);
+	initOp(&self->op_);
 	self->op_.op_type=T_PRINTSEPARATOR;
 	self->ps_kind=sep;
 	self->ps_next=NULL;
@@ -552,7 +560,6 @@ void initPrintSeparator(struct printSeparator *self, enum SEPARATORS sep)
 		}
 		return;
 	}
-
 }
 
 void endPrintSeparator(struct printSeparator *self)
@@ -561,6 +568,7 @@ void endPrintSeparator(struct printSeparator *self)
 	  to strings and print them.*/
 }
 
+/* TODO: intToFloat promoations */
 void generateTerm(struct operands *self)
 {
 	switch (self->op_type)
@@ -595,11 +603,12 @@ void doIntExpr(
 		case O_MINUS:fputs("- ",output_c); break;
 		case O_DIVIDE:fputc('/',output_c); break;
 		case O_REMAINDER:fputc('%',output_c); break;
+		default:errorLevel=E_INTERNAL; exit(1);
 	}
 	generateTerm(right);
 }
 
-struct operands *checkScope(char *name, unsigned int nameLength)
+struct operands *checkScope(const char *name, unsigned int nameLength)
 {
 	struct operands *self;
 	self=hashmap_get(&localHash , name, nameLength);
@@ -609,76 +618,37 @@ struct operands *checkScope(char *name, unsigned int nameLength)
 	return NULL;	
 }
 
-void generateOrGetIntVar(char *name, unsigned int nameLength)
+/* If variable is not found in local or global hash, appopriate variable will be generated */
+void generateOrGetVar(const char *name, unsigned int nameLength, enum TYPES type)
 {
-	struct box *self=checkScope(name, nameLength);
+	logger("variable requested");
+	struct box *self=(struct box *)checkScope(name, nameLength);
 
 	if (self==NULL)
 	{
-		self=allocOp(sizeof(struct box));
-		initOp(self);
-		self->op_.op_type=T_INTVAR;
-		self->box_name=name;
-		self->box_length=nameLength;
-		fprintf(heap_h, "int v%d;\n", self->op_.op_id);
-		if(hashmap_put(&idHash, name, nameLength, self))
-		{
-			errorLevel=E_INTERNAL;
-			exit(1);
-		}
-	}else
-	{
-		if (self->op_.op_type!=T_INTVAR)
-		{
-			errorLevel=E_TYPE_MISMATCH;
-			exit(1);
-		}
-	}
-	push(self);
-}
-
-void generateOrGetFloatVar(char *name, unsigned int nameLength)
-{
-	struct box *self=checkScope(name, nameLength);
-
-	if (self==NULL)
-	{
-		self=allocOp(sizeof(struct box));
-		initOp(self);
-		self->op_.op_type=T_FLOATVAR;
-		self->box_name=name;
-		self->box_length=nameLength;
-		fprintf(heap_h, "float v%d;\n", self->op_.op_id);
-		if(hashmap_put(&idHash, name, nameLength, self))
-		{
-			errorLevel=E_INTERNAL;
-			exit(1);
-		}
-	}else
-	{
-		if (self->op_.op_type!=T_FLOATVAR)
-		{
-			errorLevel=E_TYPE_MISMATCH;
-			exit(1);
-		}
-	}
-	push(self);
-}
-
-void generateOrGetStringVar(char *name, unsigned int nameLength)
-{
-	struct box *self=checkScope(name, nameLength);
-
-	if (self==NULL)
-	{
-		self=allocOp(sizeof(struct box));
-		initOp(self);
-		self->op_.op_type=T_STRINGVAR;
+		logger("variable generated");
+		self=(struct box *)allocOp(sizeof(struct box));
+		initOp(&self->op_);
+		self->op_.op_type=type;
 		self->box_name=name;
 		self->box_length=nameLength;
 
 		// put into heap if global and activation record if subprogram
-		fprintf(scopeGlobal?heap_h:funcs_h, "struct __string *v%d;\n", self->op_.op_id);
+		switch (type)
+		{
+			case T_STRINGVAR:
+				fprintf(scopeGlobal?heap_h:funcs_h, "struct __string *v%d=__EMPTY;\n", self->op_.op_id);
+				break;
+			case T_INTVAR:
+				fprintf(scopeGlobal?heap_h:funcs_h, "int v%d=0;\n", self->op_.op_id);
+				break;
+			case T_FLOATVAR:
+				fprintf(scopeGlobal?heap_h:funcs_h, "float v%d=0.0;\n", self->op_.op_id);
+				break;
+			default:
+				errorLevel=E_BAD_SYNTAX;
+				exit(1);
+		}
 		if(hashmap_put(scopeGlobal?&idHash:&localHash, name, nameLength, self))
 		{
 			errorLevel=E_INTERNAL;
@@ -686,16 +656,17 @@ void generateOrGetStringVar(char *name, unsigned int nameLength)
 		}
 	}else
 	{
-		if (self->op_.op_type!=T_STRINGVAR)
+		logger("variable found");
+		if (self->op_.op_type!=type)
 		{
 			errorLevel=E_TYPE_MISMATCH;
 			exit(1);
 		}
 	}
-	push(self);
+	push((struct operands *)self);
 }
 
-void generateString(int length, const char *text)
+void generateString( const char *text, int length)
 {
 	logger("string pushed");
 	if (mode & COMPILE)
@@ -707,18 +678,30 @@ void generateString(int length, const char *text)
 	}
 }
 
-void generateInt(struct operands *t, char *s)
+void generateInt(char *s)
 {
-	initOp(t);
-	t->op_type=T_INT;
-	fprintf(consts_h, "const int k%d=%s;\n", t->op_id, s);
+	logger("int pushed");
+	if (mode & COMPILE)
+	{
+		struct operands *t=allocOp(sizeof(struct operands));
+		initOp(t);
+		t->op_type=T_INT;
+		push(t);
+		fprintf(consts_h, "const int k%d=%s;\n", t->op_id, s);
+	}
 }
 
-void generateFloat(struct operands *t, char *s)
+void generateFloat(char *s)
 {
-	initOp(t);
-	t->op_type=T_FLOAT;
-	fprintf(consts_h, "const float k%d=%s;\n", t->op_id, s);
+	logger("float pushed");
+	if (mode & COMPILE)
+	{
+		struct operands *t=allocOp(sizeof(struct operands));
+		initOp(t);
+		t->op_type=T_FLOAT;
+		push(t);
+		fprintf(consts_h, "const float k%d=%s;\n", t->op_id, s);
+	}
 }
 
 void generateLabel(char *prefix, unsigned int id)
@@ -770,38 +753,58 @@ void endOp(struct operands *self)
 
 void initRepeatLoop(struct repeatLoop *self)
 {
-    initOp((struct operands *)self);
-    self->op_.op_type=T_REPEATLOOP;
-    generateLabel("loopStart", self->op_.op_id);
+	logger("repeat loop initiated");
+	if (mode & COMPILE)
+	{
+		initOp(&self->op_);
+		self->op_.op_type=T_REPEATLOOP;
+		generateLabel("loopStart", self->op_.op_id);
+	}
 }
 
 void endRepeatLoop(struct repeatLoop *self, int condition)
 {
-    generateConditionalJump("loopStart", self->op_.op_id, condition);
-    generateLabel("loopend", self->op_.op_id);
+	logger("repeat loop ended");
+	if (mode & COMPILE)
+	{
+	    generateConditionalJump("loopStart", self->op_.op_id, condition);
+    	generateLabel("loopend", self->op_.op_id);
+	}
 }
 
 /* TODO: convert cond and condition to an expression */
 void initWhileLoop(struct whileLoop *self, int cond)
 {
-    initOp((struct operands *)self);
-    self->wl_loop.op_.op_type=T_WHILELOOP;
-    self->condition=cond;
-    generateJump("loopinit", self->wl_loop.op_.op_id);
-    generateLabel("loopstart", self->wl_loop.op_.op_id);
+	logger("while loop initiated as repeat loop");
+	if (mode & COMPILE)
+	{
+		initOp(&self->wl_loop.op_);
+		self->wl_loop.op_.op_type=T_WHILELOOP;
+		self->condition=cond;
+		generateJump("loopinit", self->wl_loop.op_.op_id);
+		generateLabel("loopstart", self->wl_loop.op_.op_id);
+	}
 }
 
 /*TODO: Convert condition into an expression */
 void endWhileLoop(struct whileLoop *self)
 {
-    endRepeatLoop((struct repeatLoop *)self, self->condition);
+	logger("while loop ending soon");
+	if (mode & COMPILE)
+	{
+	    endRepeatLoop((struct repeatLoop *)self, self->condition);
+	}
 }
 
 void initDoLoop(struct operands *self)
 {
-    initOp(self);
-    self->op_type=T_DOLOOP;
-    generateLabel("loopstart", self->op_id);
+	logger("do loop initiated.");
+	if (mode & COMPILE)
+	{
+	    initOp(self);
+    	self->op_type=T_DOLOOP;
+    	generateLabel("loopstart", self->op_id);
+	}
 }
 
 void endDoLoop(struct operands *self)
@@ -812,39 +815,54 @@ void endDoLoop(struct operands *self)
 
 void generateBreak()
 {
-    switch (opStack->op_type)
+	logger("break statement created");
+	if (mode & COMPILE)
 	{
-		case T_DOLOOP:
-        case T_WHILELOOP:
-        case T_REPEATLOOP:
-	        generateJump("loopend", opStack->op_id);
-			break;
-		case T_IF:
-	        generateJump("condend", opStack->op_id);
-			break;
-		default:
-			errorLevel=E_BAD_SYNTAX;
-			break;
+		switch (opStack->op_type)
+		{
+			case T_DOLOOP:
+			case T_WHILELOOP:
+			case T_REPEATLOOP:
+				generateJump("loopend", opStack->op_id);
+				break;
+			case T_IF:
+				generateJump("condend", opStack->op_id);
+				break;
+			default:
+				errorLevel=E_BAD_SYNTAX;
+				break;
+		}
     }
 }
 
 void initConditional(struct conditional *self, int condition)
 {
-    initOp((struct operands *)self);
-    self->op_.op_type=T_IF;
-    generateLabel("condstart", self->op_.op_id);
-    generateConditionalJump("condelse", self->op_.op_id, condition);
+	logger("if conditional initiated");
+	if (mode & COMPILE)
+	{
+	    initOp(&self->op_);
+    	self->op_.op_type=T_IF;
+    	generateLabel("condstart", self->op_.op_id);
+    	generateConditionalJump("condelse", self->op_.op_id, condition);
+	}
 }
 
 void elseConditional(struct conditional *self)
 {
-    generateJump("condend", self->op_.op_id);
-    generateLabel("condelse", self->op_.op_id);
+	logger("else statement initiated");
+	{
+	    generateJump("condend", self->op_.op_id);
+    	generateLabel("condelse", self->op_.op_id);
+	}
 }
 
 void endConditional(struct conditional *self)
 {
-    generateLabel("condend", self->op_.op_id);
+	logger("if conditional ended");
+	if (mode & COMPILE)
+	{
+		generateLabel("condend", self->op_.op_id);
+	}
 }
 
 void generateSubroutineCall(unsigned int labelNum)
