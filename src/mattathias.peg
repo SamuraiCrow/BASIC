@@ -104,8 +104,8 @@ struct repeatLoop
 
 struct whileLoop
 {
-    struct repeatLoop wl_loop;
-    int condition;
+    struct operands op_;
+    int wl_condition;
 };
 
 struct conditional 
@@ -159,21 +159,20 @@ void logger(char *);
 void initPrint(struct printStatement *);
 void initEnd();
 void generateString(const char *, int);
-void initConditional(struct conditional *, int);
-void elseConditional(struct conditional *);
-void endConditional(struct conditional *);
+void initConditional(int);
+void elseConditional();
+void endConditional();
 void generateJump(char *, unsigned int);
 void generateConditionalJump(char *, unsigned int, int);
 void generateLabel(char *, unsigned int);
-void initWhileLoop(struct whileLoop *, int);
-void endWhileLoop(struct whileLoop *);
-void initRepeatLoop(struct repeatLoop *);
-void endRepeatLoop(struct repeatLoop *, int);
-void initDoLoop(struct operands *);
-void endDoLoop(struct operands *);
+void initWhileLoop(int);
+void endWhileLoop();
+void initRepeatLoop();
+void endRepeatLoop(int);
+void initDoLoop();
+void endDoLoop();
 void generateBreak();
 void initOp(struct operands *self);
-void endOp(struct operands *self);
 void generateSubroutineCall(unsigned int);
 void generateReturn();
 void endPrintSeparator(struct printSeparator *);
@@ -188,6 +187,7 @@ FILE *funcs_h=NULL;
 FILE *heap_h=NULL;
 FILE *consts_h=NULL;
 FILE *logfile=NULL;
+FILE *varNames=NULL;
 
 FILE *src=NULL;
 
@@ -534,17 +534,24 @@ void endPrint(struct printStatement *self)
 ** printStatement structure itself.  They are added to a linked list of
 ** other printSeparators leading back to the printStatement.
 */
-void initPrintSeparator(struct printSeparator *self, enum SEPARATORS sep)
+void initPrintSeparator(enum SEPARATORS sep)
 {
+	struct printSeparator *self=(struct printSeparator *)allocOp(sizeof(struct printSeparator));
 	struct printStatement *op;
 	initOp(&self->op_);
 	self->op_.op_type=T_PRINTSEPARATOR;
 	self->ps_kind=sep;
 	self->ps_next=NULL;
+
+	/* pop item to be printed */
 	if (opStack->op_type != T_PRINT) 
 	{
 		self->ps_item=pop();
+	} else
+	{
+		self->ps_item=NULL;
 	}
+
 	if (opStack->op_type == T_PRINT)	
 	{
 		op=(struct printStatement *)opStack;
@@ -585,6 +592,7 @@ void generateTerm(struct operands *self)
 	}
 }
 
+/* subexpressions left and right must be evaluated by generateTerm() */
 void doIntExpr(
 	struct operands *left,
 	enum OPERATORS op,
@@ -608,6 +616,7 @@ void doIntExpr(
 	generateTerm(right);
 }
 
+/* check for local identifier with name and global if not found */
 struct operands *checkScope(const char *name, unsigned int nameLength)
 {
 	struct operands *self;
@@ -618,7 +627,7 @@ struct operands *checkScope(const char *name, unsigned int nameLength)
 	return NULL;	
 }
 
-/* If variable is not found in local or global hash, appopriate variable will be generated */
+/* If variable is not found in local or global hash, appropriate variable will be generated */
 void generateOrGetVar(const char *name, unsigned int nameLength, enum TYPES type)
 {
 	logger("variable requested");
@@ -715,9 +724,9 @@ void generateJump(char *prefix, unsigned int id)
     fprintf(output_c, "state=%s%u;\nbreak;\n", prefix, id);
 }
 
-void generateConditionalJump(char *prefix, unsigned int id, int condition)
+void generateConditionalJump(char *prefix, unsigned int id, int cond)
 {
-    fprintf(output_c, "if (%d)\n{\n state=%s%u;\nbreak;\n}\n", condition, prefix, id);
+    fprintf(output_c, "if (%d)\n{\n state=%s%u;\nbreak;\n}\n", cond, prefix, id);
 }
 
 struct operands *allocOp(size_t size)
@@ -737,80 +746,101 @@ void initEnd()
 void initOp(struct operands *self)
 {
     /* index block according to count */
-    self->op_id=idNum;
     idNum++;
+    self->op_id=idNum;
 
     /* add block to stack */
     self->op_prev=opStack;
     opStack=self;
 }
 
-void endOp(struct operands *self)
-{
-    opStack=self->op_prev;
-	free(self);
-}
-
-void initRepeatLoop(struct repeatLoop *self)
+/* Repeat loops have a post test conditional that exits if NOT met */
+void initRepeatLoop()
 {
 	logger("repeat loop initiated");
 	if (mode & COMPILE)
 	{
+		struct repeatLoop *self=(struct repeatLoop *)allocOp(sizeof(struct repeatLoop));
 		initOp(&self->op_);
 		self->op_.op_type=T_REPEATLOOP;
 		generateLabel("loopStart", self->op_.op_id);
 	}
 }
 
-void endRepeatLoop(struct repeatLoop *self, int condition)
+void endRepeatLoop(int condition)
 {
 	logger("repeat loop ended");
 	if (mode & COMPILE)
 	{
+		struct repeatLoop *self=(struct repeatLoop *)pop();
+		if (self->op_.op_type!=T_REPEATLOOP)
+		{
+			errorLevel=E_INTERNAL;
+			exit(1);
+		}
 	    generateConditionalJump("loopStart", self->op_.op_id, condition);
     	generateLabel("loopend", self->op_.op_id);
+		free(self);
 	}
 }
 
 /* TODO: convert cond and condition to an expression */
-void initWhileLoop(struct whileLoop *self, int cond)
+void initWhileLoop(int cond)
 {
 	logger("while loop initiated as repeat loop");
 	if (mode & COMPILE)
 	{
-		initOp(&self->wl_loop.op_);
-		self->wl_loop.op_.op_type=T_WHILELOOP;
-		self->condition=cond;
-		generateJump("loopinit", self->wl_loop.op_.op_id);
-		generateLabel("loopstart", self->wl_loop.op_.op_id);
+		struct whileLoop *self=(struct whileLoop *)allocOp(sizeof(struct whileLoop));
+		initOp(&self->op_);
+		self->op_.op_type=T_WHILELOOP;
+		self->wl_condition=cond;
+		generateJump("loopinit", self->op_.op_id);
+		generateLabel("loopstart", self->op_.op_id);
+		push((struct operands *)self);
 	}
 }
 
 /*TODO: Convert condition into an expression */
-void endWhileLoop(struct whileLoop *self)
+void endWhileLoop()
 {
 	logger("while loop ending soon");
 	if (mode & COMPILE)
 	{
-	    endRepeatLoop((struct repeatLoop *)self, self->condition);
+		struct whileLoop *self=(struct whileLoop *)pop();
+		if (self->op_.op_type!=T_WHILELOOP)
+		{
+			errorLevel=E_INTERNAL;
+			exit(1);
+		}
+	    generateConditionalJump("loopStart", self->op_.op_id, self->wl_condition);
+    	generateLabel("loopend", self->op_.op_id);
+		free(self);
 	}
 }
 
-void initDoLoop(struct operands *self)
+void initDoLoop()
 {
 	logger("do loop initiated.");
 	if (mode & COMPILE)
 	{
+		struct operands *self=allocOp(sizeof(struct operands));
 	    initOp(self);
     	self->op_type=T_DOLOOP;
     	generateLabel("loopstart", self->op_id);
 	}
 }
 
-void endDoLoop(struct operands *self)
+void endDoLoop()
 {
+	struct operands *self=pop();
+	if (self->op_type!=T_DOLOOP)
+	{
+		errorLevel=E_INTERNAL;
+		exit(1);
+	}
     generateJump("loopstart", self->op_id);
     generateLabel("loopend", self->op_id);
+	free(self);
 }
 
 void generateBreak()
@@ -835,11 +865,12 @@ void generateBreak()
     }
 }
 
-void initConditional(struct conditional *self, int condition)
+void initConditional(int condition)
 {
 	logger("if conditional initiated");
 	if (mode & COMPILE)
 	{
+		struct conditional *self=(struct conditional *)allocOp(sizeof(struct conditional));
 	    initOp(&self->op_);
     	self->op_.op_type=T_IF;
     	generateLabel("condstart", self->op_.op_id);
@@ -847,28 +878,40 @@ void initConditional(struct conditional *self, int condition)
 	}
 }
 
-void elseConditional(struct conditional *self)
+void elseConditional()
 {
 	logger("else statement initiated");
 	{
+		struct conditional *self=(struct conditional *)opStack;
+		if (self->op_.op_type!=T_IF)
+		{
+			errorLevel=E_INTERNAL;
+			exit(1);
+		}
 	    generateJump("condend", self->op_.op_id);
     	generateLabel("condelse", self->op_.op_id);
 	}
 }
 
-void endConditional(struct conditional *self)
+void endConditional()
 {
 	logger("if conditional ended");
 	if (mode & COMPILE)
 	{
+		struct conditional *self=(struct conditional *)pop();
+		if (self->op_.op_type!=T_IF)
+		{
+			errorLevel=E_INTERNAL;
+			exit(1);
+		}
 		generateLabel("condend", self->op_.op_id);
+		free(self);
 	}
 }
 
 void generateSubroutineCall(unsigned int labelNum)
 {
-    unsigned int retLabel=idNum;
-    idNum++;
+    unsigned int retLabel=++idNum;
     fprintf(output_c, 
         "self->prev=callstack;\ncallStack=return%u;\nstate=label%u;\nbreak;\n",
         retLabel, labelNum);
@@ -916,6 +959,35 @@ void logger(char *contents)
 	}
 }
 
+/* dump identifiers in hashmap */
+/* Note:  reimplemented hashmap_iterate() because it did not access key or deallocate */
+void hashDump(struct hashmap_s *m, char *scope)
+{
+	unsigned int i;
+	struct hashmap_element_s *v;
+	struct operands *self;
+	if (mode & DEBUG && varNames!=NULL)
+	{
+		fprintf(varNames, "\nVariables in scope: %s\n\n", scope);
+	}
+
+	/* Linear probing of hash map*/
+	for (i = 0; i < m->table_size; i++)
+	{
+		v=&m->data[i];
+		if (v->in_use)
+		{
+			self=(struct operands *)(v->data);
+			fprintf(varNames, "v%d=%s\n", self->op_id, v->key);
+			free(self);
+			v->in_use=0;
+			v->data=HASHMAP_NULL;
+			v->key=HASHMAP_NULL;
+			m->size--;
+		}
+    }
+}
+
 /* open files and initialize them*/
 void setUp()
 {
@@ -955,6 +1027,10 @@ void setUp()
 								if (hashmap_create(1024,&localHash)!=0)
 								{
 									level=R_LOCALSALLOCATED;
+									if (mode & DEBUG)
+									{
+										varNames=fopen("varnames.txt","w");
+									}
 								}
 							}
 						}
@@ -1005,6 +1081,7 @@ void shutDown()
 		case R_LOCALSALLOCATED:
 			hashmap_destroy(&localHash);
 		case R_HASHALLOCATED:
+			hashDump(&idHash, "global");
 			hashmap_destroy(&idHash);
 		case R_FILESOPEN:
 			fprintf(states_h, "};\n");
@@ -1066,9 +1143,9 @@ void helpText(char *commandname)
 	printf("%s [-d|D|V|v|G] < filename.mb\n", commandname);
 	printf("Compiles filename.mb by default unless a flag is specified.\n");
 	printf("\n The optional flags are as follows:\n");
-	printf("-d is a dump of identifiers to the parse.log file.\n");
-	printf("-D is a dump of identifiers and debug build.\n");
-	printf("-V is for a verbose build where the compiler dumps and compiles.\n");
+	printf("-d is a dump of build to the parse.log file.\n");
+	printf("-D is a dump of identifiers and logged build.\n");
+	printf("-V is for a verbose build where the compiler logs and compiles.\n");
 	printf("-v prints the version and exits.\n\n");
 	printf("-G activates dump, debug and compile all at once.\n");
 }
