@@ -4,5 +4,5 @@
 A restart of Mattathias BASIC as a pass-and-a-half transpiler using C99 as a backend.
 
 ## External Dependencies
-[CityHash32](https://github.com/google/cityhash) string hash function
-[PackCC](https://github.com/samuraicrow/packcc) packrat parser generator
+[Hashmap](https://github.com/sheredom/hashmap.h) string hash function
+[PackCC](https://github.com/enechaev/packcc) packrat parser generator
